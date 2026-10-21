@@ -1,0 +1,12 @@
+# Table-aware hybrid RAG (ingest_financials.py, rag_pipeline.py)
+embedding_model: BAAI/bge-large-en-v1.5
+reranker_model: BAAI/bge-reranker-large
+device: cpu                 # keep retrieval models off the GPU so the 4-bit LLM has the full 8 GB
+vector_store: chroma        # chroma | qdrant
+persist_dir: null           # e.g. vector_store/ to persist the index; null = in-memory
+candidates: 20              # top-N from BM25 and from dense search before fusion
+rerank_candidates: 20       # fused candidates sent to the cross-encoder
+top_k: 5                    # chunks passed to the LLM
+rrf_k: 60                   # reciprocal rank fusion constant
+max_rows_per_chunk: 12      # long sections are split, each piece keeps the header row
+query_expansion: true       # add finance synonyms (cm2 -> variable costs ...) to the BM25 query

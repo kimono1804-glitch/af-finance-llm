@@ -1,0 +1,31 @@
+# Synthetic RAFT dataset (generate_raft_data.py)
+seed: 3407
+n_examples: 1000
+test_fraction: 0.10        # held out for evaluation (meta.split == "test")
+missing_fraction: 0.10     # "state what's missing" examples (no tool call)
+output: dataset.jsonl
+
+# Relative frequency of each task family
+task_weights:
+  net_revenue: 1.0
+  contribution_margin: 1.5
+  ebitda: 1.5
+  break_even: 1.5
+  ltv_cac: 1.5
+  payback: 1.0
+
+# Irrelevant tables mixed into each context
+distractors:
+  min: 3
+  max: 6
+max_context_chars: 5500   # drop extra distractors (never below min) to keep examples under ~5k tokens
+
+# Probability that a company carries each edge case
+edge_cases:
+  negative_gross_margin: 0.08
+  seasonal_churn_spike: 0.10
+  zero_churn: 0.03
+  capitalized_rnd: 0.25
+  deferred_revenue: 0.25
+  step_fixed_costs: 0.25
+  price_below_variable_cost: 0.06

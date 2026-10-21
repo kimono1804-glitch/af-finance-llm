@@ -71,10 +71,14 @@ af-finance-llm/
 ## Build Status
 
 1. Git + .gitignore - done
-2. RAFT data generator (1,000 examples, Qwen3 `<think>` + tool calls) - in progress
-3. QLoRA training script - pending
-4. Ingestion + hybrid RAG - pending
-5. Sample MIS + end-to-end assistant - pending
+2. RAFT data generator (1,000 examples, Qwen3 `<think>` + tool calls, 0 validation mismatches) - done
+3. QLoRA training script - done (2 epochs ~3.5 h on the RTX 5050, peak ~5.6 GB VRAM, max_seq_length 6144)
+4. Ingestion + hybrid RAG - done (dense model and reranker score metadata summaries, not raw digits)
+5. Sample MIS + end-to-end assistant - done
+
+Notes learned the hard way:
+- Qwen tokenizes numbers digit by digit, so financial tables are token-heavy. `max_context_chars` in data.yaml keeps examples under 6k tokens.
+- On Windows, the xformers wheel did not match torch cu130; it is uninstalled (unsloth falls back to PyTorch attention).
 
 Remaining from the original plan: held-out evaluation report (`reports/`) comparing base vs fine-tuned and RAG-only vs RAG+FT, and export (merged 16-bit for vLLM, GGUF for Ollama/llama.cpp).
 
