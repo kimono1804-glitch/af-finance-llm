@@ -1,0 +1,12 @@
+# Evaluation (eval_model.py)
+synthetic:
+  seed: 9001          # never used for training data (training uses 3407)
+  n_per_task: 20      # x 6 task families = 120 cases (~1-2 h per model on the RTX 5050); raise to 100 for tight error bars
+  missing_every: 7    # every 7th case per task is a missing-data case (~14%)
+# Task families to evaluate. Keep in sync with what the adapter was trained on.
+# v1 adapter (2026-10-21) was trained on the first six only.
+tasks: [net_revenue, contribution_margin, ebitda, break_even, ltv_cac, payback]
+top_k: null           # null = configs/rag.yaml top_k
+temperature: 0.0      # greedy decoding for reproducible scores
+max_new_tokens: 1536
+max_time_per_turn: 240   # seconds; a generate() call that runs longer is cut off (guards against stalls)

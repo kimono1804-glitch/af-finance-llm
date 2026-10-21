@@ -1,5 +1,17 @@
 # Startup Finance LLM: RAG + Unsloth Fine-Tuning
 
+## Session start (do this first, every session)
+
+1. Read `documentation/memory.md` and `documentation/Changelog.md`. A SessionStart hook (`.claude/hooks/session_start.sh`) injects both; if they are not in context, read them yourself.
+2. Use them as the project's memory. Do NOT analyse the whole codebase at session start. Open a source file only when the task needs its exact contents.
+
+## Documentation rules (every prompt, without being asked)
+
+- After every prompt that changes anything (code, configs, data, datasets, models/adapters, environment/packages, git state, docs), add an entry at the TOP of `documentation/Changelog.md`: `## YYYY-MM-DD HH:MM IST - title`, then what changed, which files, why. Log even the smallest change. Get the time with `date`.
+- After every prompt, update `documentation/memory.md` with anything new: discoveries, decisions, file purposes, results/metrics, environment facts, gotchas, user preferences. Do not drop details. Update its "Last updated" line.
+- A Stop hook (`.claude/hooks/stop_docs_check.sh`) blocks finishing a turn if project files changed after the docs were last touched.
+- After every build session, show the user the **build progress %** (section 1 of memory.md) and update that table.
+
 End-to-end startup financial analysis engine. A fine-tuned model (Unsloth QLoRA on Qwen3-4B) supplies CFO-style reasoning, a table-aware hybrid RAG pipeline supplies company-specific numbers, and deterministic Python executes all arithmetic.
 
 ## Architecture Rules (do not violate)

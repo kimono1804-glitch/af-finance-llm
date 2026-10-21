@@ -7,6 +7,7 @@ title, source, sheet, section, periods and units, plus the column headers and ro
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 
 from common.schemas import ChunkMetadata
@@ -27,6 +28,29 @@ def format_cell(value: object, is_percent: bool = False) -> str:
             return f"{int(round(value)):,}"
         return f"{value:,.2f}"
     return str(value).strip().replace("|", "/").replace("\n", " ")
+
+
+_INT_CELL = re.compile(r"^\(?-?\d{1,3}(?:,\d{3})*\)?$")
+_DEC_CELL = re.compile(r"^\(?-?\d{1,3}(?:,\d{3})*\.\d+\)?$")
+
+
+def align_row_decimals(row: Sequence[str]) -> list[str]:
+    """If any number in a row has decimals, show whole numbers in that row with the same decimals.
+
+    '1,240' between '1,240.04' and '1,239.99' reads like a different kind of value and led the model to take
+    the neighbouring column. Label cells and percentages are left alone.
+    """
+    cells = list(row)
+    decs = [len(c.split(".")[1].rstrip(")")) for c in cells if _DEC_CELL.match(c)]
+    if not decs:
+        return cells
+    places = max(decs)
+    out = []
+    for c in cells:
+        if _INT_CELL.match(c):
+            c = c[:-1] + "." + "0" * places + ")" if c.endswith(")") else c + "." + "0" * places
+        out.append(c)
+    return out
 
 
 def markdown_table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
@@ -53,7 +77,7 @@ def render_chunk(title: str, meta: ChunkMetadata, headers: Sequence[str], rows: 
         meta_parts.append(f"Units: {meta.units}")
     if meta.page is not None:
         meta_parts.append(f"Page: {meta.page}")
-    return f"#### {title}\n" + " | ".join(meta_parts) + "\n" + markdown_table(headers, rows)
+    return f"#### {title}\n" + " | ".join(meta_parts) + "\n" + markdown_table(headers, [align_row_decimals(r) for r in rows])
 
 
 def render_text_chunk(title: str, meta: ChunkMetadata, text: str) -> str:

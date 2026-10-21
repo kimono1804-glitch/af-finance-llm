@@ -46,6 +46,8 @@ def test_long_sections_split_keep_header():
 def test_period_normalisation_and_tokens():
     assert normalize_periods("CM2 for March 2026") == "CM2 for Mar-26"
     assert normalize_periods("in Jan 26") == "in Jan-26"
+    assert normalize_periods("Mar '26 and March 2026") == "Mar-26 and Mar-26"
+    assert normalize_periods("magic number for Q4 of FY2026") == "magic number for Q4 FY26"
     toks = tokenize("S&M spend Mar-26 P&L")
     assert {"s&m", "mar-26", "mar", "26", "p&l"} <= set(toks)
 

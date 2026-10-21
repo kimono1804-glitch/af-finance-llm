@@ -3,6 +3,7 @@ seed: 3407
 n_examples: 1000
 test_fraction: 0.10        # held out for evaluation (meta.split == "test")
 missing_fraction: 0.10     # "state what's missing" examples (no tool call)
+missing_period_share: 0.4  # of those: question asks for a month outside every table (rest: an input cell/row is absent)
 output: dataset.jsonl
 
 # Relative frequency of each task family
@@ -13,6 +14,10 @@ task_weights:
   break_even: 1.5
   ltv_cac: 1.5
   payback: 1.0
+  runway: 1.0
+  burn_multiple: 1.0
+  magic_number: 1.0
+  gross_margin: 0.75
 
 # Irrelevant tables mixed into each context
 distractors:
@@ -29,3 +34,5 @@ edge_cases:
   deferred_revenue: 0.25
   step_fixed_costs: 0.25
   price_below_variable_cost: 0.06
+  cash_positive: 0.08          # cash in > cash out -> runway not applicable
+  arr_decline: 0.08            # ARR shrinks -> burn multiple undefined

@@ -29,9 +29,10 @@ def test_deterministic():
 
 
 def test_all_tasks_and_missing_examples_present():
-    examples = generate(_cfg(200))
+    cfg = _cfg(300)
+    examples = generate(cfg)
     tasks = Counter(e["meta"]["task"] for e in examples)
-    assert set(tasks) == {"net_revenue", "contribution_margin", "ebitda", "break_even", "ltv_cac", "payback"}
+    assert set(tasks) == set(cfg["task_weights"])
     assert any(e["meta"]["missing"] for e in examples)
     assert any(e["meta"]["split"] == "test" for e in examples)
 
@@ -50,3 +51,28 @@ def test_missing_example_has_no_tool_call():
     assert ex["meta"]["missing"]
     assert len(ex["messages"]) == 3 and "tool_calls" not in ex["messages"][2]
     assert "missing" in ex["messages"][2]["content"].lower()
+
+
+def test_new_task_families_validate_with_edge_cases():
+    cfg = _cfg()
+    cfg["edge_cases"] = {**cfg["edge_cases"], "cash_positive": 0.5, "arr_decline": 0.5}
+    for task in ("runway", "burn_multiple", "magic_number", "gross_margin"):
+        for i in range(12):
+            ex = build_example(2000 + i, cfg, task, missing=(task in ("magic_number", "gross_margin") and i % 4 == 0),
+                               split="train")
+            assert not validate_example(ex), (task, i, validate_example(ex))
+
+
+def test_period_gap_examples():
+    """Asked month outside every table: one assistant turn, no tool call, names the month, month not in context."""
+    cfg = _cfg()
+    cfg["missing_period_share"] = 1.0
+    for task in ("ltv_cac", "ebitda", "runway", "burn_multiple"):
+        ex = build_example(7, cfg, task, missing=True, split="train")
+        assert ex["meta"]["missing_kind"] == "period", task
+        asked = ex["meta"]["period"]
+        context = ex["messages"][1]["content"].rsplit("Question:", 1)[0]
+        assert asked not in context
+        assert len(ex["messages"]) == 3 and "tool_calls" not in ex["messages"][2]
+        assert asked in ex["messages"][2]["content"]
+        assert not validate_example(ex), validate_example(ex)

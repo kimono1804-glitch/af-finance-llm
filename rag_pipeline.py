@@ -40,6 +40,7 @@ QUERY_EXPANSION = {
     "contribution": "variable costs fulfillment payment gateway packaging cogs revenue",
     "gross margin": "cogs cost of revenue net revenue gross margin %",
     "ebitda": "ebit depreciation amortization net income interest tax one-off items",
+    "ebitda margin": "gross revenue discounts returns net revenue",
     "ltv": "arpu churn gross margin unit economics customers",
     "cac": "new customers s&m spend sales marketing spend unit economics",
     "payback": "cac arpu gross margin new customers s&m spend",
@@ -50,9 +51,15 @@ QUERY_EXPANSION = {
 }
 
 
+_FY_RE = re.compile(r"\bFY\s?20(\d{2})\b", re.IGNORECASE)
+_Q_OF_RE = re.compile(r"\bQ([1-4])\s+of\s+FY", re.IGNORECASE)
+
+
 def normalize_periods(text: str) -> str:
-    """'March 2026' / 'Mar 26' -> 'Mar-26' so BM25 matches table headers."""
-    return _MONTH_NAME_RE.sub(lambda m: f"{m.group(1).title()}-{m.group(2)}", text)
+    """'March 2026' / 'Mar 26' -> 'Mar-26'; 'Q4 of FY2026' -> 'Q4 FY26', so BM25 matches table headers."""
+    text = _MONTH_NAME_RE.sub(lambda m: f"{m.group(1).title()}-{m.group(2)}", text)
+    text = _FY_RE.sub(lambda m: f"FY{m.group(1)}", text)
+    return _Q_OF_RE.sub(lambda m: f"Q{m.group(1)} FY", text)
 
 
 def tokenize(text: str) -> list[str]:

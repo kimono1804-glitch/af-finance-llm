@@ -24,6 +24,23 @@ ROOT = Path(__file__).resolve().parent
 COMPANY = "Nimbus Botanics Pvt Ltd (synthetic sample)"
 MONTHS = [dt.date(2025, 4, 1)] + [dt.date(2025 + (m // 12), m % 12 + 1, 1) for m in range(4, 15)]
 
+# FY27 pricing plan (Pricing sheet). Shared with eval_cases.py for ground truth.
+PRICING = {"price": 649, "variable_cost": 386.5, "fixed_costs": 9_850_000, "planned_hires": 1_420_000}
+
+PL_SECTIONS = [
+    ("Revenue", [("Gross Revenue", "gross_revenue"), ("Discounts & Coupons", "discounts"), ("Returns & Refunds", "returns")]),
+    ("Cost of Revenue", [("COGS", "cogs")]),
+    ("Variable Costs", [("Fulfillment & Logistics", "fulfillment"), ("Payment Gateway Fees", "payment_gateway"),
+                        ("Packaging", "packaging")]),
+    ("Marketing", [("Performance Marketing", "perf_marketing"), ("Brand Marketing", "brand_marketing")]),
+    ("Operating Expenses", [("Salaries & Wages", "salaries"), ("Rent & Utilities", "rent"), ("Tech & Software", "tech"),
+                            ("General & Admin", "g_and_a")]),
+    ("D&A, Interest & Tax", [("Depreciation", "depreciation"), ("Amortization of Intangibles", "amortization"),
+                             ("Amortization of Capitalized R&D", "amort_rnd"), ("Interest Expense", "interest"),
+                             ("Income Tax", "taxes")]),
+    ("Profit Summary", [("Operating Income (EBIT)", "ebit"), ("Net Profit / (Loss)", "net_income")]),
+]
+
 BOLD = Font(bold=True)
 SECTION_FILL = PatternFill("solid", fgColor="DDEBF7")
 HEADER_FILL = PatternFill("solid", fgColor="1F4E78")
@@ -123,20 +140,7 @@ def build_workbook(out: Path) -> Path:
     ws.title = "P&L"
     _title(ws, "Monthly P&L", "INR", COMPANY)
     _header(ws, ["Line Item", *MONTHS])
-    sections = [
-        ("Revenue", [("Gross Revenue", "gross_revenue"), ("Discounts & Coupons", "discounts"), ("Returns & Refunds", "returns")]),
-        ("Cost of Revenue", [("COGS", "cogs")]),
-        ("Variable Costs", [("Fulfillment & Logistics", "fulfillment"), ("Payment Gateway Fees", "payment_gateway"),
-                            ("Packaging", "packaging")]),
-        ("Marketing", [("Performance Marketing", "perf_marketing"), ("Brand Marketing", "brand_marketing")]),
-        ("Operating Expenses", [("Salaries & Wages", "salaries"), ("Rent & Utilities", "rent"), ("Tech & Software", "tech"),
-                                ("General & Admin", "g_and_a")]),
-        ("D&A, Interest & Tax", [("Depreciation", "depreciation"), ("Amortization of Intangibles", "amortization"),
-                                 ("Amortization of Capitalized R&D", "amort_rnd"), ("Interest Expense", "interest"),
-                                 ("Income Tax", "taxes")]),
-        ("Profit Summary", [("Operating Income (EBIT)", "ebit"), ("Net Profit / (Loss)", "net_income")]),
-    ]
-    for name, rows in sections:
+    for name, rows in PL_SECTIONS:
         _section(ws, name)
         for label, key in rows:
             _row(ws, label, d[key])
@@ -158,10 +162,10 @@ def build_workbook(out: Path) -> Path:
     _title(ws, "Pricing & Cost Structure", "INR per unit unless stated", "FY27 Plan")
     _header(ws, ["Item", "Value"])
     _section(ws, "Unit Cost & Fixed Cost Plan")
-    for label, v, fmt in [("Average Selling Price (per unit)", 649, "#,##0"),
-                          ("Variable Cost per Unit", 386.5, "#,##0.00"),
-                          ("Monthly Fixed Costs", 9_850_000, "#,##0"),
-                          ("Planned Hires - added monthly cost (from Apr-26)", 1_420_000, "#,##0")]:
+    for label, v, fmt in [("Average Selling Price (per unit)", PRICING["price"], "#,##0"),
+                          ("Variable Cost per Unit", PRICING["variable_cost"], "#,##0.00"),
+                          ("Monthly Fixed Costs", PRICING["fixed_costs"], "#,##0"),
+                          ("Planned Hires - added monthly cost (from Apr-26)", PRICING["planned_hires"], "#,##0")]:
         ws.append([label, v])
         ws.cell(ws.max_row, 2).number_format = fmt
     ws.column_dimensions["A"].width = 48
@@ -190,11 +194,66 @@ def build_workbook(out: Path) -> Path:
     return out
 
 
+def build_board_pack_pdf(out: Path) -> Path:
+    """Same company as a board-pack PDF (narrative page + P&L + unit economics tables) for testing Docling ingestion."""
+    from fpdf import FPDF
+
+    d = build_data()
+    labels = [m.strftime("%b-%y") for m in MONTHS]
+    pdf = FPDF(orientation="L", unit="mm", format="A4")
+    pdf.set_auto_page_break(True, margin=10)
+
+    pdf.add_page()
+    pdf.set_font("Helvetica", "B", 16)
+    pdf.cell(0, 10, "Nimbus Botanics - Board Pack FY26 (synthetic sample)", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(0, 8, "CEO Commentary", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", "", 10)
+    pdf.multi_cell(0, 5, "Revenue grew through the festive season (Oct-Nov) and held up in Q4. Churn spiked in Jan-26 after "
+                         "the festive cohort. Two hiring waves (Jul-25, Dec-25) raised payroll. The FY27 plan adds a further "
+                         "hiring wave from Apr-26. All figures are in INR.")
+
+    def table(title: str, rows: list[tuple[str, list[str]]]) -> None:
+        pdf.add_page()
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.cell(0, 8, title, new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 6.5)
+        with pdf.table(col_widths=(46, *([19] * len(labels))), text_align=("LEFT", *(["RIGHT"] * len(labels))),
+                       line_height=4) as t:
+            for label, cells in [("Line Item", labels), *rows]:
+                r = t.row()
+                r.cell(label)
+                for c in cells:
+                    r.cell(c)
+
+    def fmt(v: float, pct: bool = False) -> str:
+        return f"{v * 100:.2f}%" if pct else (f"{v:,.0f}" if abs(v - round(v)) < 1e-9 else f"{v:,.2f}")
+
+    pl_rows: list[tuple[str, list[str]]] = []
+    for name, rows in PL_SECTIONS:
+        pl_rows.append((name, [""] * len(labels)))
+        pl_rows += [(label, [fmt(x) for x in d[key]]) for label, key in rows]
+    table("Monthly P&L (INR)", pl_rows)
+    table("Unit Economics (INR unless stated)", [
+        ("New Customers", [fmt(x) for x in d["new_customers"]]),
+        ("ARPU (monthly)", [fmt(x) for x in d["arpu"]]),
+        ("Gross Margin %", [fmt(x, True) for x in d["gm"]]),
+        ("Monthly Churn %", [fmt(x, True) for x in d["churn"]]),
+        ("Total S&M Spend", [fmt(x) for x in d["sm_spend"]]),
+    ])
+    pdf.output(str(out))
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", default=str(ROOT / "sample_startup_mis.xlsx"))
-    out = build_workbook(Path(ap.parse_args().out))
+    ap.add_argument("--pdf", help="also write a board-pack PDF of the same data to this path")
+    args = ap.parse_args()
+    out = build_workbook(Path(args.out))
     print(f"wrote {out}")
+    if args.pdf:
+        print(f"wrote {build_board_pack_pdf(Path(args.pdf))}")
 
 
 if __name__ == "__main__":

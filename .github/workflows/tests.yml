@@ -1,0 +1,24 @@
+name: tests
+
+# Fast test suite (no GPU, no model downloads): formulas, calculator, dataset generation + validation,
+# Excel ingestion, BM25 retrieval, scoring, relative periods, server backend.
+# The Docling PDF test is marked `slow` and skipped here.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install light dependencies
+        run: pip install pydantic pyyaml pandas openpyxl rank-bm25 pytest
+      - name: Run tests
+        run: pytest -q
+      - name: Validate a fresh synthetic dataset
+        run: python generate_raft_data.py --n 300 --output /tmp/ds.jsonl

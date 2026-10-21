@@ -68,7 +68,13 @@ def main() -> None:
     ap.add_argument("--config", default=str(ROOT / "configs" / "train.yaml"))
     ap.add_argument("--max-steps", type=int, default=-1, help="stop early (smoke test)")
     ap.add_argument("--epochs", type=float, help="override epochs")
+    ap.add_argument("--resume", action="store_true", help="resume from the latest checkpoint in output_dir")
+    ap.add_argument("--no-eval", action="store_true",
+                    help="skip mid-training eval (on 8 GB cards eval can spill VRAM into shared memory and stall training)")
     args = ap.parse_args()
+    from common.winperf import boost_process
+
+    boost_process()  # keep the GPU-feeding thread off Windows efficiency cores
     cfg = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
     tcfg, lcfg = cfg["train"], cfg["lora"]
 
@@ -118,7 +124,7 @@ def main() -> None:
         return texts
 
     train_ds = Dataset.from_dict({"text": render(train_ex)})
-    eval_ds = Dataset.from_dict({"text": render(test_ex)}) if tcfg.get("eval") else None
+    eval_ds = Dataset.from_dict({"text": render(test_ex)}) if tcfg.get("eval") and not args.no_eval else None
 
     sft_args = SFTConfig(
         output_dir=str(ROOT / cfg["output_dir"]),
@@ -167,7 +173,7 @@ def main() -> None:
 
     gpu = torch.cuda.get_device_properties(0)
     print(f"GPU: {gpu.name}, {gpu.total_memory / 1024**3:.1f} GB")
-    stats = trainer.train()
+    stats = trainer.train(resume_from_checkpoint=True if args.resume else None)
     print(f"train runtime: {stats.metrics.get('train_runtime', 0) / 60:.1f} min, "
           f"peak VRAM: {torch.cuda.max_memory_reserved() / 1024**3:.2f} GB")
 

@@ -90,3 +90,6 @@ data/private/
 .env.*
 *.key
 *.pem
+
+# Exported models (merged weights, GGUF)
+exports/

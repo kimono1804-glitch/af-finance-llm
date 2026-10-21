@@ -24,8 +24,9 @@ import hashlib
 import json
 import math
 import random
+import re
 import sys
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,12 +36,14 @@ import yaml
 
 from common import formulas as F
 from common.audit import unsupported_inputs
+from common.periods import month_key
 from common.prompts import SYSTEM_PROMPT, TOOLS, build_user_message
 from common.schemas import ChunkMetadata
 from common.tables import format_cell, render_chunk
 from common.tools import TOOL_NAME, execute, response_to_json
 
 ROOT = Path(__file__).resolve().parent
+_MONTH_LABEL_RE = re.compile(r"^[A-Z][a-z]{2}-\d{2}$")
 PROMPT_VERSION = hashlib.sha1((SYSTEM_PROMPT + json.dumps(TOOLS, sort_keys=True)).encode()).hexdigest()[:10]
 
 # ---------------------------------------------------------------------------
@@ -94,6 +97,17 @@ LABELS: dict[str, list[str]] = {
     "fx_rent": ["Rent (monthly)", "Office Rent (monthly)"],
     "fx_software": ["Software & Tools (monthly)", "Tools & Subscriptions (monthly)"],
     "hires": ["Planned Hires - added monthly cost", "New Hires Payroll (monthly, planned)"],
+    # Cash
+    "opening_cash": ["Opening Cash Balance", "Opening Bank Balance"],
+    "cash_in": ["Cash In", "Total Cash Inflows", "Collections & Inflows"],
+    "cash_out": ["Cash Out", "Total Cash Outflows", "Payments & Outflows"],
+    "closing_cash": ["Closing Cash Balance", "Closing Bank Balance"],
+    # ARR bridge
+    "arr_open": ["Opening ARR", "ARR (start of month)"],
+    "arr_new": ["New ARR", "New Business ARR"],
+    "arr_expansion": ["Expansion ARR", "Upsell ARR"],
+    "arr_churned": ["Churned ARR", "Lost ARR"],
+    "arr_close": ["Closing ARR", "ARR (end of month)"],
 }
 
 PCT_KEYS = {"gm_pct", "churn_pct"}
@@ -139,6 +153,7 @@ class Company:
     target: int
     plan_label: str
     scale: float
+    ym: list[tuple[int, int]] = field(default_factory=list)   # (year, month) for each entry in months
 
     @property
     def period(self) -> str:
@@ -150,9 +165,10 @@ def simulate_company(rng: random.Random, edge_probs: dict[str, float]) -> Compan
     currency = rng.choice(["INR", "USD"])
     n = rng.randint(12, 36)
     y, m = rng.randint(2022, 2024), rng.randint(1, 12)
-    months = []
+    months, ym = [], []
     for _ in range(n):
         months.append(month_label(y, m))
+        ym.append((y, m))
         m += 1
         if m > 12:
             m, y = 1, y + 1
@@ -179,12 +195,11 @@ def simulate_company(rng: random.Random, edge_probs: dict[str, float]) -> Compan
     interest = 0.0 if rng.random() < 0.3 else scale * rng.uniform(0.002, 0.02)
     arpu = round(loguniform(rng, 250, 6000) if currency == "INR" else loguniform(rng, 8, 400), rng.choice([0, 2]))
     base_churn = rng.uniform(0.8, 8.0)
+    cash = r10(scale * rng.uniform(15, 50))
+    burn_extra = scale * rng.uniform(0.02, 0.15)
+    arr = r10(scale * 12 * rng.uniform(0.3, 0.9))
 
-    d: dict[str, list[float]] = {k: [] for k in [
-        "gross_revenue", "discounts", "returns", "billings", "deferred_change", "cogs", "fulfillment",
-        "payment_gateway", "packaging", "perf_marketing", "brand_marketing", "salaries", "rent", "tech", "g_and_a",
-        "depreciation", "amortization", "amort_rnd", "interest", "taxes", "ebit", "net_income", "headcount",
-        "new_customers", "active_customers", "arpu", "gm_pct", "churn_pct", "sm_spend"]}
+    d: dict[str, list[float]] = defaultdict(list)
     for t in range(n):
         if t in hires:
             hc += rng.randint(3, 12)
@@ -210,6 +225,18 @@ def simulate_company(rng: random.Random, edge_probs: dict[str, float]) -> Compan
         if "zero_churn" in edges:
             churn = 0.0
         active = max(50, round(nr / arpu)) if nr > 0 else 50
+        cash_in = r10(gr * rng.uniform(0.82, 0.95))
+        if "cash_positive" in edges:
+            cash_out = r10(cash_in * rng.uniform(0.8, 0.97))
+        else:
+            cash_out = max(10, r10(cash_in - ebit + burn_extra))
+        if cash + cash_in - cash_out < scale * 2:  # an equity raise lands this month
+            cash_in = r10(cash_in + scale * rng.uniform(15, 40))
+        opening = cash
+        cash = F.difference(F.total([opening, cash_in]), cash_out)
+        new_arr, exp_arr = r10(arr * rng.uniform(0.02, 0.08)), r10(arr * rng.uniform(0.0, 0.02))
+        lost_arr = r10(arr * (rng.uniform(0.08, 0.14) if "arr_decline" in edges else rng.uniform(0.005, 0.03)))
+        arr_close = F.difference(F.total([arr, new_arr, exp_arr]), lost_arr)
         row = {
             "gross_revenue": gr, "discounts": disc, "returns": ret, "billings": billings,
             "deferred_change": F.difference(billings, gr), "cogs": cogs, "fulfillment": ful, "payment_gateway": pg,
@@ -218,8 +245,11 @@ def simulate_company(rng: random.Random, edge_probs: dict[str, float]) -> Compan
             "interest": intr, "taxes": tax, "ebit": ebit, "net_income": ni, "headcount": hc,
             "new_customers": max(5, round(active * rng.uniform(0.04, 0.25))), "active_customers": active,
             "arpu": arpu, "gm_pct": round(F.gross_margin(nr, cogs) * 100, 2), "churn_pct": churn,
-            "sm_spend": F.total([perf, br]),
+            "sm_spend": F.total([perf, br]), "net_revenue": nr,
+            "opening_cash": opening, "cash_in": cash_in, "cash_out": cash_out, "closing_cash": cash,
+            "arr_open": arr, "arr_new": new_arr, "arr_expansion": exp_arr, "arr_churned": lost_arr, "arr_close": arr_close,
         }
+        arr = arr_close
         for k, v in row.items():
             d[k].append(v)
 
@@ -247,7 +277,7 @@ def simulate_company(rng: random.Random, edge_probs: dict[str, float]) -> Compan
     source = rng.choice([f"{slug}_mis_{end_label}.xlsx", f"{slug}_monthly_mis.xlsx", f"{slug}_board_pack_{end_label}.pdf"])
     labels = {k: rng.choice(v) for k, v in LABELS.items()}
     plan_label = f"FY{(int(months[end][-2:]) + 1) % 100:02d} Plan"
-    return Company(name, currency, months, d, pricing, labels, edges, source, window, target, plan_label, scale)
+    return Company(name, currency, months, dict(d), pricing, labels, edges, source, window, target, plan_label, scale, ym)
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +367,47 @@ def pricing_table(c: Company, rng: random.Random, row_keys: list[str], scenarios
                  [c.plan_label], f"{c.currency} per unit unless stated", c.source, _page(c, rng))
 
 
+def cash_flow_table(c: Company, rng: random.Random) -> Table:
+    return monthly_table(c, rng, "cash_flow", "Cash Flow - Bank", "Cash", "Cash Flow",
+                         ["opening_cash", "cash_in", "cash_out", "closing_cash"])
+
+
+def arr_table(c: Company, rng: random.Random) -> Table:
+    return monthly_table(c, rng, "arr", "SaaS Metrics - ARR Bridge", "SaaS Metrics", "ARR Bridge",
+                         ["arr_open", "arr_new", "arr_expansion", "arr_churned", "arr_close"])
+
+
+def fy_quarters(c: Company) -> list[tuple[str, list[int]]]:
+    """Complete Indian-FY quarters (Q1 = Apr-Jun) that end on or before the window's last month."""
+    out, i = [], 0
+    while i + 2 < len(c.ym) and i + 2 <= c.window[-1]:
+        y, m = c.ym[i]
+        if m in (1, 4, 7, 10):
+            fy = y + 1 if m >= 4 else y
+            out.append((f"Q{((m - 4) % 12) // 3 + 1} FY{fy % 100:02d}", [i, i + 1, i + 2]))
+            i += 3
+        else:
+            i += 1
+    return out
+
+
+def quarter_values(c: Company, months: list[int]) -> dict[str, float]:
+    return {"q_revenue": F.total([c.data["net_revenue"][i] for i in months]),
+            "q_sm": F.total([c.data["sm_spend"][i] for i in months]),
+            "q_customers": c.data["active_customers"][months[-1]]}
+
+
+QUARTER_ROWS = {"q_revenue": "Net Revenue", "q_sm": "S&M Spend", "q_customers": "Ending Customers"}
+
+
+def quarterly_table(c: Company, rng: random.Random, quarters: list[tuple[str, list[int]]]) -> Table:
+    vals = [quarter_values(c, ms) for _, ms in quarters]
+    rows = [[label, *[format_cell(v[k]) for v in vals]] for k, label in QUARTER_ROWS.items()]
+    labels = [q for q, _ in quarters]
+    return Table("quarterly", "Quarterly Summary - Revenue & S&M", "Quarterly", "Quarterly KPIs",
+                 ["Line Item", *labels], rows, labels, c.currency, c.source, _page(c, rng))
+
+
 # --- distractors -----------------------------------------------------------
 
 def distractor_tables(c: Company, rng: random.Random) -> dict[str, Table]:
@@ -360,12 +431,7 @@ def distractor_tables(c: Company, rng: random.Random) -> dict[str, Table]:
         ["Conversion Rate %", *[f"{rng.uniform(0.8, 4.5):.2f}%" for _ in periods]],
         ["Average Order Value", *[format_cell(r10(c.data["arpu"][i] * rng.uniform(0.8, 1.6))) for i in c.window]],
     ], f"{c.currency} / count")
-    cash0 = r10(c.scale * rng.uniform(4, 30))
-    cash = monthly("d_cash", "Cash Position", "Cash", "Bank & Debt", [
-        ["Opening Cash Balance", *[format_cell(r10(cash0 * (1 - 0.04 * j))) for j in range(len(periods))]],
-        ["Closing Cash Balance", *[format_cell(r10(cash0 * (1 - 0.04 * (j + 1)))) for j in range(len(periods))]],
-        ["Debt Outstanding", *[format_cell(r10(c.scale * 2)) for _ in periods]],
-    ], c.currency)
+    cash = cash_flow_table(c, rng)
     ret0 = rng.uniform(0.55, 0.85)
     cohort_rows = []
     for j, p in enumerate(periods[:3]):
@@ -934,6 +1000,181 @@ def plan_payback(c: Company, rng: random.Random) -> Plan:
                 missing_ok=[i for i, n in enumerate(needs) if n.table == "unit_econ"])
 
 
+# --- 7. Runway -------------------------------------------------------------
+
+def plan_runway(c: Company, rng: random.Random) -> Plan:
+    P = c.period
+    cb = mneed(c, "closing_cash", "cash_flow", "Closing Cash Balance")
+    ci = mneed(c, "cash_in", "cash_flow", "Cash In")
+    co = mneed(c, "cash_out", "cash_flow", "Cash Out")
+    steps = [step("net_burn", "net_burn", cash_out=lit(co), cash_in=lit(ci)),
+             step("runway_months", "runway_months", cash_balance=lit(cb), net_burn="@net_burn")]
+    nb = F.net_burn(co.value, ci.value)
+    truth: dict[str, float | None] = {"net_burn": nb}
+    try:
+        truth["runway_months"] = F.runway_months(cb.value, nb)
+    except F.FinanceMathError:
+        truth["runway_months"] = None
+    notes = [f'Runway uses the closing balance for {P}, not "{c.labels["opening_cash"]}".']
+
+    def take(disp, vals, errs):
+        if "runway_months" in errs:
+            return [f"Net burn is {disp['net_burn']}: cash in exceeded cash out in {P}, so the company is not burning "
+                    "cash and runway is not a constraint this month. Check whether that inflow was a one-off (e.g. a raise)."]
+        m = vals["runway_months"]
+        if m < 6:
+            return [f"Runway of {disp['runway_months']} is critical. Start fundraising or cut burn immediately."]
+        if m < 12:
+            return [f"Runway of {disp['runway_months']}: begin a raise now; fundraises usually take 6+ months."]
+        if m < 18:
+            return [f"Runway of {disp['runway_months']} is workable; plan the next raise within two quarters."]
+        return [f"Runway of {disp['runway_months']} is comfortable at the current burn."]
+
+    q = rng.choice([f"What is our runway as of {P}?", f"How many months of cash do we have left based on {P} burn?",
+                    f"Calculate net burn and runway for {P}.", f"At the {P} burn rate, when do we run out of money?"])
+    return Plan("runway", "runway", "Runway", P, q, [cash_flow_table(c, rng)], [cb, ci, co], steps,
+                ["Net Burn = Cash Out - Cash In", "Runway (months) = Cash Balance / Net Burn"], notes,
+                [("Net Burn", "net_burn", "Cash Out - Cash In"), ("Runway", "runway_months", "Closing Cash / Net Burn")],
+                truth, take, missing_ok=[], uses_pl=False)  # cash in/out derivable from opening/closing: never "missing"
+
+
+# --- 8. Burn multiple -------------------------------------------------------
+
+def plan_burn_multiple(c: Company, rng: random.Random) -> Plan:
+    P = c.period
+    variant = rng.choice(["bridge", "open_close"])
+    ci, co = mneed(c, "cash_in", "cash_flow", "Cash In"), mneed(c, "cash_out", "cash_flow", "Cash Out")
+    needs = [ci, co]
+    steps = [step("net_burn", "net_burn", cash_out=lit(co), cash_in=lit(ci))]
+    nb = F.net_burn(co.value, ci.value)
+    truth: dict[str, float | None] = {"net_burn": nb}
+    rows = [("Net Burn", "net_burn", "Cash Out - Cash In")]
+    if variant == "open_close":
+        ao, ac = mneed(c, "arr_open", "arr", "Opening ARR"), mneed(c, "arr_close", "arr", "Closing ARR")
+        needs += [ao, ac]
+        steps.append(step("net_new_arr", "difference", a=lit(ac), b=lit(ao)))
+        nna = F.difference(ac.value, ao.value)
+        arr_formula = "Closing ARR - Opening ARR"
+        missing_ok: list[int] = []  # every input is derivable from the other rows
+    else:
+        an = mneed(c, "arr_new", "arr", "New ARR")
+        ae = mneed(c, "arr_expansion", "arr", "Expansion ARR")
+        al = mneed(c, "arr_churned", "arr", "Churned ARR")
+        needs += [an, ae, al]
+        steps += [step("gross_new_arr", "total", values=[lit(an), lit(ae)]),
+                  step("net_new_arr", "difference", a="@gross_new_arr", b=lit(al))]
+        gross = F.total([an.value, ae.value])
+        truth["gross_new_arr"] = gross
+        nna = F.difference(gross, al.value)
+        arr_formula = "New ARR + Expansion ARR - Churned ARR"
+        rows.append(("Gross New ARR", "gross_new_arr", "New + Expansion"))
+        missing_ok = []
+    truth["net_new_arr"] = nna
+    steps.append(step("burn_multiple", "burn_multiple", net_burn="@net_burn", net_new_arr="@net_new_arr"))
+    try:
+        truth["burn_multiple"] = F.burn_multiple(nb, nna)
+    except F.FinanceMathError:
+        truth["burn_multiple"] = None
+    formulas = ["Net Burn = Cash Out - Cash In", f"Net New ARR = {arr_formula}", "Burn Multiple = Net Burn / Net New ARR"]
+    rows += [("Net New ARR", "net_new_arr", arr_formula), ("Burn Multiple", "burn_multiple", "Net Burn / Net New ARR")]
+    notes = [f"The ARR bridge and the cash flow are both monthly, so I use the {P} column of each."]
+
+    def take(disp, vals, errs):
+        if "burn_multiple" in errs:
+            return [f"Net new ARR is {disp['net_new_arr']}: ARR shrank in {P}, so burn multiple is undefined. The company "
+                    "is spending cash without growing ARR; fix churn before adding acquisition spend."]
+        b = vals["burn_multiple"]
+        if b < 0:
+            return [f"Burn multiple is {disp['burn_multiple']}: the company generated cash while growing ARR."]
+        if b < 1:
+            return [f"Burn multiple of {disp['burn_multiple']} is excellent: less cash burned than ARR added."]
+        if b < 2:
+            return [f"Burn multiple of {disp['burn_multiple']} is good for an early-stage company."]
+        if b < 3:
+            return [f"Burn multiple of {disp['burn_multiple']} needs attention; growth is getting expensive."]
+        return [f"Burn multiple of {disp['burn_multiple']} is high: too much cash burned per unit of new ARR."]
+
+    q = rng.choice([f"What was our burn multiple in {P}?", f"How efficient was our growth in {P}? Give me the burn multiple.",
+                    f"Calculate net burn, net new ARR and burn multiple for {P}."])
+    return Plan("burn_multiple", variant, "Burn Multiple", P, q, [cash_flow_table(c, rng), arr_table(c, rng)], needs, steps,
+                formulas, notes, rows, truth, take, missing_ok=missing_ok, uses_pl=False)
+
+
+# --- 9. Magic number ---------------------------------------------------------
+
+def plan_magic_number(c: Company, rng: random.Random) -> Plan:
+    qs = fy_quarters(c)
+    if len(qs) < 2:
+        return plan_runway(c, rng)
+    shown = qs[-4:]
+    qi = len(shown) - 1 if (rng.random() < 0.7 or len(shown) == 2) else rng.randint(1, len(shown) - 1)
+    cur, prev = shown[qi], shown[qi - 1]
+    vc, vp = quarter_values(c, cur[1]), quarter_values(c, prev[1])
+
+    def qneed(name: str, key: str, q: str, value: float) -> Need:
+        return Need(name, "quarterly", QUARTER_ROWS[key], q, value, format_cell(value), key)
+
+    needs = [qneed(f"Net Revenue ({cur[0]})", "q_revenue", cur[0], vc["q_revenue"]),
+             qneed(f"Net Revenue ({prev[0]})", "q_revenue", prev[0], vp["q_revenue"]),
+             qneed(f"S&M Spend ({prev[0]})", "q_sm", prev[0], vp["q_sm"])]
+    steps = [step("magic_number", "magic_number", current_qtr_revenue=lit(needs[0]), prior_qtr_revenue=lit(needs[1]),
+                  prior_qtr_sm_spend=lit(needs[2]))]
+    truth: dict[str, float | None] = {"magic_number": F.magic_number(vc["q_revenue"], vp["q_revenue"], vp["q_sm"])}
+    notes = [f"Magic number uses the PRIOR quarter's S&M spend ({prev[0]}), not the S&M spend of {cur[0]}.",
+             "Quarterly figures are given directly, so no monthly totals are needed."]
+
+    def take(disp, vals, errs):
+        m = vals["magic_number"]
+        if m < 0:
+            return [f"Magic number is {disp['magic_number']}: revenue fell quarter on quarter despite S&M spend."]
+        if m < 0.5:
+            return [f"Magic number of {disp['magic_number']} is below 0.5: S&M spend is inefficient; fix the funnel first."]
+        if m < 0.75:
+            return [f"Magic number of {disp['magic_number']} is moderate; optimise channels before adding budget."]
+        return [f"Magic number of {disp['magic_number']} is above 0.75: S&M is efficient and can be scaled."]
+
+    q = rng.choice([f"What is our magic number for {cur[0]}?",
+                    f"Is our sales and marketing efficient? Compute the magic number for {cur[0]}.",
+                    f"Calculate the SaaS magic number for {cur[0]} versus {prev[0]}."])
+    return Plan("magic_number", "magic_number", "Magic Number", cur[0], q, [quarterly_table(c, rng, shown)], needs, steps,
+                ["Magic Number = (Current Qtr Revenue - Prior Qtr Revenue) x 4 / Prior Qtr S&M Spend"], notes,
+                [("Magic Number", "magic_number", "(Rev now - Rev prior) x 4 / Prior S&M")], truth, take,
+                missing_ok=[0, 2], uses_pl=False)
+
+
+# --- 10. Gross margin ---------------------------------------------------------
+
+def plan_gross_margin(c: Company, rng: random.Random) -> Plan:
+    P = c.period
+    gr, di, re_ = (mneed(c, k, "pl_revenue") for k in ("gross_revenue", "discounts", "returns"))
+    cogs = mneed(c, "cogs", "pl_cogs")
+    steps = [step("net_revenue", "net_revenue", gross_revenue=lit(gr), discounts=lit(di), returns=lit(re_)),
+             step("gross_profit", "gross_profit", net_revenue="@net_revenue", cogs=lit(cogs)),
+             step("gross_margin", "gross_margin", net_revenue="@net_revenue", cogs=lit(cogs))]
+    nr = F.net_revenue(gr.value, di.value, re_.value)
+    truth: dict[str, float | None] = {"net_revenue": nr, "gross_profit": F.gross_profit(nr, cogs.value),
+                                      "gross_margin": F.gross_margin(nr, cogs.value)}
+    notes = ["Gross margin is measured on NET revenue (after discounts and returns), not gross revenue."]
+
+    def take(disp, vals, errs):
+        g = vals["gross_margin"]
+        if g < 0:
+            return [f"Gross margin is negative ({disp['gross_margin']}): COGS exceeds net revenue. Fix pricing or sourcing first."]
+        if g < 0.4:
+            return [f"Gross margin of {disp['gross_margin']} is thin for a consumer brand; watch COGS and discounting."]
+        return [f"Gross margin of {disp['gross_margin']} is healthy."]
+
+    q = rng.choice([f"What was our gross margin in {P}?", f"Calculate gross profit and gross margin for {P}.",
+                    f"After COGS, how much of our {P} net revenue did we keep?"])
+    return Plan("gross_margin", "gross_margin", "Gross Margin", P, q,
+                [pl_table(c, rng, "pl_revenue"), pl_table(c, rng, "pl_cogs")], [gr, di, re_, cogs], steps,
+                ["Net Revenue = Gross Revenue - (Discounts + Returns)", "Gross Profit = Net Revenue - COGS",
+                 "Gross Margin = (Net Revenue - COGS) / Net Revenue"], notes,
+                [("Net Revenue", "net_revenue", "Gross Revenue - (Discounts + Returns)"),
+                 ("Gross Profit", "gross_profit", "Net Revenue - COGS"),
+                 ("Gross Margin", "gross_margin", "Gross Profit / Net Revenue")], truth, take, missing_ok=[0, 1, 2, 3])
+
+
 TASKS: dict[str, Callable[[Company, random.Random], Plan]] = {
     "net_revenue": plan_net_revenue,
     "contribution_margin": plan_contribution_margin,
@@ -941,6 +1182,10 @@ TASKS: dict[str, Callable[[Company, random.Random], Plan]] = {
     "break_even": plan_break_even,
     "ltv_cac": plan_ltv_cac,
     "payback": plan_payback,
+    "runway": plan_runway,
+    "burn_multiple": plan_burn_multiple,
+    "magic_number": plan_magic_number,
+    "gross_margin": plan_gross_margin,
 }
 
 # ---------------------------------------------------------------------------
@@ -952,6 +1197,32 @@ OPENERS = ["The question asks for {what} for {period}.", "Goal: {what} for {peri
 CLOSERS = ["All arithmetic goes to finance_calculator; I will not compute anything by hand.",
            "Sending these inputs to finance_calculator instead of doing the math myself.",
            "Next: pass the extracted inputs to finance_calculator."]
+
+
+MONTH_NAMES = {abbr: full for abbr, full in zip(calendar.month_abbr[1:], calendar.month_name[1:])}
+
+
+def say_period(rng: random.Random, label: str) -> str:
+    """How a founder might write a period in a question. Tables always use 'Mar-26' / 'Q4 FY26'."""
+    m = re.match(r"^([A-Z][a-z]{2})-(\d{2})$", label)
+    if m:
+        mon, yy = m.group(1), m.group(2)
+        # never "April 25": it reads like a date (25 April)
+        return rng.choice([label, label, f"{MONTH_NAMES[mon]} 20{yy}", f"{mon} 20{yy}", f"{mon} '{yy}"])
+    q = re.match(r"^Q([1-4]) FY(\d{2})$", label)
+    if q:
+        return rng.choice([label, label, f"Q{q.group(1)} of FY{q.group(2)}", f"Q{q.group(1)} FY20{q.group(2)}"])
+    return label
+
+
+def absent_months(c: Company) -> list[str]:
+    """Months just outside the table window (up to 12 before, up to 6 after): asked about, but not in any table."""
+    def shift(y: int, m: int, k: int) -> str:
+        t = y * 12 + (m - 1) + k
+        return month_label(t // 12, t % 12 + 1)
+
+    (y0, m0), (y1, m1) = c.ym[c.window[0]], c.ym[c.window[-1]]
+    return [shift(y0, m0, -k) for k in range(1, 13)] + [shift(y1, m1, k) for k in range(1, 7)]
 
 
 def apply_missing(plan: Plan, tables: list[Table], rng: random.Random) -> Need:
@@ -967,20 +1238,77 @@ def apply_missing(plan: Plan, tables: list[Table], rng: random.Random) -> Need:
     return need
 
 
+def _what(plan: Plan) -> str:
+    if plan.task != "contribution_margin":
+        return plan.title
+    return "CM1, CM2 and CM3" if plan.variant == "cm3" else "CM1 and CM2"
+
+
+def period_gap_example(idx: int, plan: Plan, c: Company, tables: list[Table], ref: Callable[[str], str],
+                       asked: str, rng: random.Random, task: str, split: str) -> dict[str, Any]:
+    """Missing-data example where the asked month is outside every table. One assistant turn, no tool call.
+
+    Teaches the behaviour the v1 adapter lacked: it used a neighbouring period's column and labelled it as the
+    asked period.
+    """
+    first, last = c.months[c.window[0]], c.months[c.window[-1]]
+    question = plan.question.replace(plan.period, say_period(rng, asked))
+    user = build_user_message([t.render() for t in tables], question)
+    dated = [t for t in tables if any(_MONTH_LABEL_RE.match(h) for h in t.headers)]
+    think = [rng.choice(OPENERS).format(what=_what(plan), period=asked),
+             f"Periods in the context: {first} to {last}"
+             + (f" ({', '.join(ref(t.key) for t in dated)})." if dated else "."),
+             f"{asked} is not in any table.",
+             f"Missing: {asked} data. {plan.title} cannot be computed for {asked}, and I must not use another "
+             f"period's column (such as {last if month_key(asked) > month_key(last) else first}) in its place. "
+             "I will not call the calculator."]
+    report = "\n".join([
+        f"## CFO Report: {plan.title} ({asked}) - data missing",
+        "",
+        f"**Cannot compute {plan.title}:** {asked} is not in the provided data (the tables cover {first} to {last}).",
+        "",
+        f"**Next step:** share the MIS for {asked}, or ask about a period between {first} and {last}. "
+        "No value has been assumed and no other period's figures were used.",
+    ])
+    meta: dict[str, Any] = {
+        "id": f"raft-{idx:05d}", "task": task, "variant": plan.variant, "split": split, "period": asked,
+        "company": c.name, "currency": c.currency, "edge_cases": sorted(c.edges), "missing": asked,
+        "missing_kind": "period", "prompt_version": PROMPT_VERSION,
+    }
+    msgs = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user},
+            {"role": "assistant", "content": "<think>\n" + "\n".join(think) + "\n</think>\n\n" + report}]
+    return {"id": meta["id"], "messages": msgs, "meta": meta}
+
+
 def build_example(idx: int, cfg: dict[str, Any], task: str, missing: bool, split: str) -> dict[str, Any]:
     rng = random.Random(cfg["seed"] * 1_000_003 + idx)
     c = simulate_company(rng, cfg["edge_cases"])
     plan = TASKS[task](c, rng)
-    if missing and not plan.missing_ok:
-        missing = False
+    # Two kinds of missing-data example: a needed input cell/row is absent ("cell"), or the question asks for a
+    # month that no table covers ("period"). Period gaps also work for runway / burn multiple, whose inputs are
+    # always derivable from other rows.
+    gap_ok = bool(_MONTH_LABEL_RE.match(plan.period)) and plan.period in plan.question
+    period_gap = False
+    if missing:
+        if gap_ok and (not plan.missing_ok or rng.random() < cfg.get("missing_period_share", 0.4)):
+            period_gap = True
+        elif not plan.missing_ok:
+            missing = False
     relevant = plan.tables
-    missing_need = apply_missing(plan, relevant, rng) if missing else None
+    missing_need = apply_missing(plan, relevant, rng) if missing and not period_gap else None
 
     # Distractors: other P&L sections + unrelated tables. Missing-data examples avoid any table that
     # could be an alternative source for the missing value.
     pool = dict(distractor_tables(c, rng))
     rel_keys = {t.key for t in relevant}
+    for k in rel_keys:
+        pool.pop(k, None)
     if not missing:
+        if "arr" not in rel_keys:
+            pool["arr"] = arr_table(c, rng)
+        qs = fy_quarters(c)
+        if "quarterly" not in rel_keys and len(qs) >= 2:
+            pool["quarterly"] = quarterly_table(c, rng, qs[-4:])
         for k in PL_SECTIONS:
             if k not in rel_keys:
                 pool[k] = pl_table(c, rng, k)
@@ -1005,7 +1333,15 @@ def build_example(idx: int, cfg: dict[str, Any], task: str, missing: bool, split
     pos = {t.key: i + 1 for i, t in enumerate(tables)}
     ref = lambda key: f"[{pos[key]}]"  # noqa: E731
 
-    user = build_user_message([t.render() for t in tables], plan.question)
+    if period_gap:
+        rendered = "\n".join(t.render() for t in tables)
+        options = [p for p in absent_months(c) if p not in rendered]
+        if options:
+            return period_gap_example(idx, plan, c, tables, ref, rng.choice(options), rng, task, split)
+        missing = False  # every nearby month appears somewhere (very rare): fall back to a normal example
+
+    question = plan.question.replace(plan.period, say_period(rng, plan.period)) if plan.period in plan.question else plan.question
+    user = build_user_message([t.render() for t in tables], question)
 
     # --- first assistant turn: extraction + formula choice
     think = [rng.choice(OPENERS).format(what=plan.title if plan.task != "contribution_margin" else
@@ -1053,6 +1389,7 @@ def build_example(idx: int, cfg: dict[str, Any], task: str, missing: bool, split
         ])
         msgs.append({"role": "assistant", "content": f"<think>\n" + "\n".join(think) + "\n</think>\n\n" + report})
         meta["missing"] = missing_need.name
+        meta["missing_kind"] = "cell"
         return {"id": meta["id"], "messages": msgs, "meta": meta}
 
     think.append(rng.choice(CLOSERS))
@@ -1079,7 +1416,8 @@ def build_example(idx: int, cfg: dict[str, Any], task: str, missing: bool, split
         t2.append("I will report the failed metrics as not computable with the reason, not estimate them.")
 
     report_lines = [f"## CFO Report: {plan.title} ({plan.period})",
-                    f"{c.name} | Source: {c.source} | Currency: {c.currency}", "",
+                    # Only facts that are in the context: the company name never is (v1 taught the model to invent one).
+                    f"Source: {c.source} | Currency: {c.currency}", "",
                     "| Metric | Value | Formula |", "|---|---|---|"]
     for metric, sid, formula in plan.report_rows:
         if sid in disp:
@@ -1129,6 +1467,12 @@ def validate_example(ex: dict[str, Any]) -> list[str]:
             errs.append("missing-data example must have one assistant turn and no tool call")
         if "missing" not in msgs[2]["content"].lower():
             errs.append("missing-data report does not say what is missing")
+        if meta.get("missing_kind") == "period":
+            context = msgs[1]["content"].rsplit("Question:", 1)[0]
+            if meta["period"] in context:
+                errs.append(f"period-gap example: {meta['period']} appears in the context")
+            if meta["period"] not in msgs[2]["content"]:
+                errs.append("period-gap example: the answer does not name the asked period")
         return errs
     call = msgs[2]["tool_calls"][0]["function"]
     resp = execute(call["arguments"])
