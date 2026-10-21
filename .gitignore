@@ -1,0 +1,92 @@
+# ---------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# ---------------------------------------------------------------
+# Virtual environments
+# ---------------------------------------------------------------
+.venv/
+venv/
+env/
+.conda/
+conda-env/
+
+# ---------------------------------------------------------------
+# Editors / OS
+# ---------------------------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------------------------------------------------------------
+# Model weights, adapters, training outputs
+# ---------------------------------------------------------------
+outputs/
+qwen3_4b_finance_lora/
+*_lora/
+merged_*/
+gguf/
+*.gguf
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.onnx
+unsloth_compiled_cache/
+_unsloth_*/
+wandb/
+runs/
+.cache/
+
+# ---------------------------------------------------------------
+# Generated datasets
+# ---------------------------------------------------------------
+dataset.jsonl
+dataset*.jsonl
+data/generated/
+
+# ---------------------------------------------------------------
+# Vector storage
+# ---------------------------------------------------------------
+vector_store/
+chroma_db/
+chroma/
+qdrant_storage/
+*.sqlite3
+
+# ---------------------------------------------------------------
+# Real financial documents (personal / confidential).
+# Everything spreadsheet- or PDF-shaped is blocked by default;
+# only the synthetic dummy MIS file is allowed through.
+# Put real files in data/private/ (also ignored).
+# ---------------------------------------------------------------
+data/private/
+*.xlsx
+*.xlsm
+*.xls
+*.xlsb
+*.ods
+*.csv
+*.pdf
+!sample_startup_mis.xlsx
+
+# ---------------------------------------------------------------
+# Secrets
+# ---------------------------------------------------------------
+.env
+.env.*
+*.key
+*.pem

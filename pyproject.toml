@@ -1,0 +1,27 @@
+[project]
+name = "af-finance-llm"
+version = "0.1.0"
+description = "Startup finance assistant: Qwen3 QLoRA fine-tune + table-aware hybrid RAG + deterministic Python math"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.6",
+    "pyyaml>=6.0",
+    "pandas>=2.2",
+    "openpyxl>=3.1",
+    "rank-bm25>=0.2.2",
+    "sentence-transformers>=3.0",
+    "chromadb>=0.5",
+]
+
+[project.optional-dependencies]
+# GPU training/inference. Install CUDA torch first:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu130
+train = ["unsloth", "trl", "peft", "bitsandbytes", "datasets", "transformers", "accelerate"]
+pdf = ["docling"]
+qdrant = ["qdrant-client"]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: needs model downloads or a GPU"]
+addopts = "-m 'not slow'"
