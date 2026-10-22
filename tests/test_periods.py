@@ -5,21 +5,21 @@ PERIODS = ["Apr-25", "May-25", "Dec-25", "Jan-26", "Feb-26", "Mar-26", "Q3 FY26"
 
 def test_latest_and_previous_month():
     q, notes = resolve_relative_periods("What was CM2 last month?", PERIODS)
-    assert q == "What was CM2 Mar-26?" and "Mar-26" in notes[0]
+    assert q == "What was CM2 in Mar-26?" and "Mar-26" in notes[0]
     q, _ = resolve_relative_periods("Compare with the previous month", PERIODS)
-    assert q == "Compare with the Feb-26"
+    assert q == "Compare with Feb-26"
 
 
 def test_year_boundary_ordering():
     q, _ = resolve_relative_periods("runway this month", ["Nov-25", "Dec-25", "Jan-26"])
-    assert q == "runway Jan-26"
+    assert q == "runway in Jan-26"
 
 
 def test_quarters():
     q, _ = resolve_relative_periods("magic number for the latest quarter", PERIODS)
-    assert q == "magic number for the Q4 FY26"
+    assert q == "magic number for Q4 FY26"
     q, _ = resolve_relative_periods("magic number for the prior quarter", PERIODS)
-    assert q == "magic number for the Q3 FY26"
+    assert q == "magic number for Q3 FY26"
 
 
 def test_unresolvable_and_untouched():
@@ -59,3 +59,23 @@ def test_missing_periods():
     assert missing_periods("break-even under the FY27 plan", months) == []
     report = period_not_available_report(["Mar-25"], months, ["mis.xlsx"])
     assert "Mar-25" in report and "Apr-25 to Mar-26" in report and "not available" in report.lower()
+
+
+MONTHS_FY26 = ["Apr-25", "May-25", "Jun-25", "Jul-25", "Aug-25", "Sep-25", "Oct-25", "Nov-25", "Dec-25", "Jan-26",
+               "Feb-26", "Mar-26"]
+
+
+def test_relative_phrase_with_explicit_month_is_left_alone():
+    # "the month before" is relative to Feb-26 here; rewriting it to the data's second-latest month gave "Feb-26 vs Feb-26"
+    for q in ["Did active customers go up or down in Feb-26 vs the month before?",
+              "How much did gross revenue grow in Mar-26 versus the previous month?"]:
+        assert resolve_relative_periods(q, MONTHS_FY26) == (q, [])
+
+
+def test_quarter_without_column_gets_its_months():
+    q, notes = resolve_relative_periods("How many new customers did we add in Q3 FY26?", MONTHS_FY26)
+    assert q == "How many new customers did we add in Q3 FY26 (Oct-25, Nov-25, Dec-25)?" and "Indian" in notes[0]
+    # a quarterly table with that column: untouched (magic number / QoQ questions)
+    assert resolve_relative_periods("magic number for Q3 FY26", MONTHS_FY26 + ["Q3 FY26"]) == ("magic number for Q3 FY26", [])
+    # months not all in the data: untouched (the period guard handles it)
+    assert resolve_relative_periods("revenue in Q1 FY25", MONTHS_FY26)[0] == "revenue in Q1 FY25"

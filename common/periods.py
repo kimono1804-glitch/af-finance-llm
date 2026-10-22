@@ -13,10 +13,14 @@ _MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct",
 _MONTH_RE = re.compile(r"^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-(\d{2})$")
 _QUARTER_RE = re.compile(r"^Q([1-4]) FY(\d{2})$")
 
-_LATEST_MONTH = re.compile(r"\b(?:last|latest|this|current|most recent|the recent)\s+month\b", re.IGNORECASE)
-_PREVIOUS_MONTH = re.compile(r"\b(?:previous|prior)\s+month\b|\bthe month before(?: last)?\b", re.IGNORECASE)
-_LATEST_QUARTER = re.compile(r"\b(?:last|latest|this|current|most recent)\s+quarter\b", re.IGNORECASE)
-_PREVIOUS_QUARTER = re.compile(r"\b(?:previous|prior)\s+quarter\b", re.IGNORECASE)
+# An optional leading "the" is part of the match so "in the previous month" becomes "in Feb-26".
+_LATEST_MONTH = re.compile(r"\b(?:the\s+)?(?:last|latest|this|current|most recent|recent)\s+month\b", re.IGNORECASE)
+_PREVIOUS_MONTH = re.compile(r"\b(?:the\s+)?(?:previous|prior)\s+month\b|\bthe month before(?: last)?\b", re.IGNORECASE)
+_LATEST_QUARTER = re.compile(r"\b(?:the\s+)?(?:last|latest|this|current|most recent)\s+quarter\b", re.IGNORECASE)
+_PREVIOUS_QUARTER = re.compile(r"\b(?:the\s+)?(?:previous|prior)\s+quarter\b", re.IGNORECASE)
+# words after which a period label reads naturally ("in Mar-26", "vs Feb-26"); otherwise "in" is inserted
+_PREPOSITIONS = {"in", "for", "during", "of", "from", "over", "on", "vs", "versus", "with", "than", "to", "and", "since",
+                 "until", "till", "by", "between", "at", "against"}
 
 
 def month_key(label: str) -> tuple[int, int] | None:
@@ -106,25 +110,55 @@ def period_not_available_report(missing: list[str], periods: Iterable[str], sour
 
 
 def resolve_relative_periods(question: str, periods: Iterable[str]) -> tuple[str, list[str]]:
-    """Return (rewritten question, notes). Periods come from chunk metadata."""
+    """Return (rewritten question, notes). Periods come from chunk metadata.
+
+    - "last / latest / this month" -> latest month in the data, "previous month" -> second latest (same for quarters),
+      but only when the question names no explicit period of that kind: "Feb-26 vs the month before" is relative to
+      Feb-26, which the model handles itself (MoM training questions are worded exactly like that).
+    - A quarter the data has no column for, but whose months are all present, gets its months spelled out:
+      "Q3 FY26" -> "Q3 FY26 (Oct-25, Nov-25, Dec-25)" (Indian FY), so the model never has to map quarters to months.
+    """
     labels = set(periods)
     months = sorted((p for p in labels if month_key(p)), key=month_key)  # type: ignore[arg-type]
     quarters = sorted((p for p in labels if quarter_key(p)), key=quarter_key)  # type: ignore[arg-type]
+    explicit = asked_periods(question)
+    has_month = any(month_key(p) for p in explicit)
+    has_quarter = any(quarter_key(p) for p in explicit)
     notes: list[str] = []
 
     def sub(pattern: re.Pattern[str], options: list[str], back: int, what: str, q: str) -> str:
-        if not pattern.search(q):
+        m = pattern.search(q)
+        if not m:
             return q
         if len(options) < back:
-            notes.append(f"Could not resolve '{pattern.search(q).group(0)}': no {what} periods in the data.")
+            notes.append(f"Could not resolve '{m.group(0)}': no {what} periods in the data.")
             return q
         target = options[-back]
-        notes.append(f"Interpreted '{pattern.search(q).group(0)}' as {target} ({'latest' if back == 1 else 'second latest'} "
+        notes.append(f"Interpreted '{m.group(0)}' as {target} ({'latest' if back == 1 else 'second latest'} "
                      f"{what} in the data).")
-        return pattern.sub(target, q)
 
-    q = sub(_PREVIOUS_MONTH, months, 2, "month", question)
-    q = sub(_LATEST_MONTH, months, 1, "month", q)
-    q = sub(_PREVIOUS_QUARTER, quarters, 2, "quarter", q)
-    q = sub(_LATEST_QUARTER, quarters, 1, "quarter", q)
+        def repl(mm: re.Match[str]) -> str:
+            before = q[:mm.start()].rstrip().split()
+            prev = before[-1].lower().strip(",(") if before else ""
+            return target if prev in _PREPOSITIONS else f"in {target}"
+
+        return pattern.sub(repl, q)
+
+    q = question
+    if not has_month:
+        q = sub(_PREVIOUS_MONTH, months, 2, "month", q)
+        q = sub(_LATEST_MONTH, months, 1, "month", q)
+    if not has_quarter:
+        q = sub(_PREVIOUS_QUARTER, quarters, 2, "quarter", q)
+        q = sub(_LATEST_QUARTER, quarters, 1, "quarter", q)
+
+    def spell(m: re.Match[str]) -> str:
+        label = f"Q{m.group(1)} FY{m.group(2)}"
+        qm = quarter_months(label)
+        if label in labels or not qm or not all(x in labels for x in qm):
+            return m.group(0)
+        notes.append(f"{label} = {', '.join(qm)} (Indian financial year, April start).")
+        return f"{m.group(0)} ({', '.join(qm)})"
+
+    q = _ASKED_QUARTER_RE.sub(spell, q)
     return q, notes

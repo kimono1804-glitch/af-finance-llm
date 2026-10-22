@@ -5,8 +5,8 @@ background work (e.g. started from an editor terminal), it can run that thread o
 then sits ~5-10% busy and generation drops from ~12-15 to ~3 tokens/s (seen 2026-10-21; pinning the running
 eval to the P-cores restored full speed within one turn).
 
-boost_process() opts this process out of power throttling (EcoQoS) and pins it to the performance cores.
-Both are per-process, need no admin rights, and are skipped on other OSes, on CPUs without E-cores, or when
+boost_process() opts this process out of power throttling (EcoQoS), pins it to the performance cores, and asks
+Windows not to idle-sleep while the process runs (SetThreadExecutionState). All are per-process, need no admin rights, and are skipped on other OSes, on CPUs without E-cores, or when
 the environment variable AF_NO_CPU_BOOST=1 is set.
 """
 
@@ -19,6 +19,8 @@ import sys
 _PROCESS_POWER_THROTTLING = 4            # PROCESS_INFORMATION_CLASS.ProcessPowerThrottling
 _THROTTLE_EXECUTION_SPEED = 0x1
 _RELATION_PROCESSOR_CORE = 0
+_ES_CONTINUOUS = 0x80000000
+_ES_SYSTEM_REQUIRED = 0x00000001
 
 
 class _PowerThrottlingState(ctypes.Structure):
@@ -75,6 +77,12 @@ def boost_process(verbose: bool = True) -> str:
             k32.SetProcessAffinityMask.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
             if k32.SetProcessAffinityMask(proc, mask):
                 done.append(f"pinned to {bin(mask).count('1')} performance-core threads (mask 0x{mask:X})")
+        # Keep the PC from idle-sleeping (Modern Standby) while this process runs: the v2 training paused for
+        # 66 min on 2026-10-22 when the laptop went to standby. Held by this (main) thread until the process exits;
+        # closing the lid can still sleep, depending on the lid setting.
+        k32.SetThreadExecutionState.restype = ctypes.c_uint
+        if k32.SetThreadExecutionState(ctypes.c_uint(_ES_CONTINUOUS | _ES_SYSTEM_REQUIRED)):
+            done.append("sleep blocked while running")
     except (OSError, AttributeError) as exc:  # never block a run over this
         done.append(f"failed: {exc}")
     msg = "cpu boost: " + (", ".join(done) if done else "nothing changed")

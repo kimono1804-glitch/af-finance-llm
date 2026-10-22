@@ -38,8 +38,8 @@ from typing import Any
 import yaml
 
 from common.prompts import build_user_message
-from common.scoring import (METRICS, Gold, aggregate, aggregate_by, fmt_pct, required_formulas_from_steps, score,
-                            trace_from_gold_messages)
+from common.scoring import (METRICS, Gold, aggregate, aggregate_by, fmt_pct, optional_from_steps,
+                            required_formulas_from_steps, score, trace_from_gold_messages)
 
 ROOT = Path(__file__).resolve().parent
 
@@ -69,7 +69,8 @@ def synthetic_cases(cfg: dict[str, Any], v1_compat: bool = False) -> list[tuple[
             missing_kw = [meta["missing"].split("(")[0].strip().rstrip("%").strip()] if meta["missing"] else []
             gold = Gold(case_id=meta["id"], suite="synthetic", task=task, question=question,
                         context=msgs[1]["content"], truth=truth, required_formulas=required_formulas_from_steps(steps),
-                        missing=meta["missing"], missing_keywords=missing_kw, edge_cases=meta["edge_cases"])
+                        missing=meta["missing"], missing_keywords=missing_kw, edge_cases=meta["edge_cases"],
+                        optional=optional_from_steps(steps))
             out.append((gold, msgs[1]["content"], msgs))
     return out
 
@@ -257,6 +258,8 @@ def main() -> None:
     ap.add_argument("--report", help="report path (default reports/eval_<date>[_tag].md)")
     ap.add_argument("--no-period-guard", action="store_true",
                     help="real-world suite: send questions about absent periods to the model (measures the raw model)")
+    ap.add_argument("--rescore", action="store_true",
+                    help="no LLM: re-score the cached runs for these settings with the current scorer and rewrite the report")
     ap.add_argument("--adapter", help="adapter dir for the fine-tuned model (default: configs/train.yaml adapter_dir)")
     ap.add_argument("--contract", choices=["v1", "v2"], default=None,
                     help="prompt contract for every model; default = the configured adapter's (base gets the same)")
@@ -319,6 +322,32 @@ def main() -> None:
 
     contract = args.contract or ("v1" if args.v1_compat else adapter_contract(adapter))
     header.append(f"- Prompt contract: {contract}")
+    if args.rescore:  # same cases, same run files; only the scoring is redone
+        names = ([f"server: {args.server_model}"] if args.backend == "server" else
+                 {"ft": ["fine-tuned"], "base": ["base"], "both": ["fine-tuned", "base"]}[args.models])
+        golds = {g.case_id: g for g, *_ in cases}
+        results = {}
+        for name in names:
+            fname = (f"server_{args.server_model.replace(':', '_')}{tag}.jsonl" if args.backend == "server"
+                     else f"{name.replace('-', '_')}{tag}.jsonl")
+            path = runs_dir / fname
+            if not path.exists():
+                print(f"[{name}] no run file {path}")
+                continue
+            rows = []
+            for line in path.read_text(encoding="utf-8").splitlines():
+                old = json.loads(line)
+                if old["case_id"] not in golds:
+                    continue
+                new = score(old["trace"], golds[old["case_id"]])
+                new["latency_s"], new["trace"] = old.get("latency_s"), old["trace"]
+                if new["end_to_end"] != old["end_to_end"]:
+                    print(f"[{name}] {old['case_id']}: end-to-end {old['end_to_end']} -> {new['end_to_end']}")
+                rows.append(new)
+            results[name] = rows
+            print(f"[{name}] re-scored {len(rows)} cached cases")
+        write_report(report, results, recall_rows, header + ["- Mode: re-scored cached runs (no new generation)"])
+        return
     if args.backend == "server":
         from run_assistant import ServerLLM
 

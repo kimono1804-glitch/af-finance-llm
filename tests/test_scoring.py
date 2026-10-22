@@ -73,3 +73,25 @@ def test_realworld_cases_have_finite_truth():
         assert c.needed_sections
     be = next(c for c in cases if c.case_id == "rw-14")
     assert be.truth["units_after"][0] > be.truth["units_now"][0]
+
+
+def test_optional_intermediates():
+    from common.scoring import Gold, optional_from_steps, score
+
+    steps = [{"id": "gross_new_arr", "formula": "total", "inputs": {"values": [100, 20]}},
+             {"id": "net_new_arr", "formula": "difference", "inputs": {"a": "@gross_new_arr", "b": 30}},
+             {"id": "burn_multiple", "formula": "burn_multiple", "inputs": {"net_burn": 180, "net_new_arr": "@net_new_arr"}}]
+    assert optional_from_steps(steps) == {"gross_new_arr"}  # net_new_arr is an answer (it feeds a non-helper too)
+    gold = Gold(case_id="x", suite="synthetic", task="burn_multiple", question="q",
+                context="Opening ARR 1000 Closing ARR 1090 cash out 500 cash in 320 new 100 expansion 20 churned 30",
+                truth={"gross_new_arr": [120.0], "net_new_arr": [90.0], "burn_multiple": [2.0]},
+                optional={"gross_new_arr"})
+
+    def trace(nna: float, bm: float) -> dict:
+        res = {"net_new_arr": {"value": nna, "display": f"{nna:,.0f}"}, "burn_multiple": {"value": bm, "display": f"{bm:.2f}x"}}
+        return {"thinks": [], "report": f"| Net New ARR | {nna:,.0f} | | Burn Multiple | {bm:.2f}x |",
+                "calls": [{"call": {"name": "finance_calculator", "arguments": {"steps": []}},
+                           "result": {"results": res, "errors": {}}, "unsupported_inputs": []}]}
+
+    assert score(trace(90.0, 2.0), gold)["end_to_end"]          # closing - opening route: fine
+    assert not score(trace(95.0, 1.89), gold)["end_to_end"]     # wrong answer still fails

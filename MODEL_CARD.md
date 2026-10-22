@@ -1,6 +1,6 @@
 # Model Card: af-finance-qwen3-4b (draft)
 
-> Draft. Evaluation numbers will be filled in from `reports/eval_*.md` after the evaluation run.
+> Draft. v1 evaluation numbers below; v2 numbers will be added after the v2 run.
 
 ## Summary
 
@@ -34,11 +34,28 @@ Synthetic companies (12-36 months of P&L, unit economics, pricing, cash and ARR 
 
 ## Evaluation
 
-To be filled from `reports/`:
-- Synthetic held-out (fresh seed, oracle context): numeric accuracy, formula accuracy, faithfulness, missing-data and edge-case handling; fine-tuned vs base.
-- Real-world questions on the sample MIS through the full RAG pipeline: same metrics, RAG + fine-tune vs RAG only.
-- Quantized GGUF vs adapter.
-- Retrieval recall on the real-world questions: 100% (31/31: 26 on the sample MIS, 5 on a lakh-format copy) as of 2026-10-22.
+v1 adapter, `reports/eval_2026-10-22_v1.md` (greedy decoding; fine-tuned and base model scored on identical inputs; ground truth from Python):
+
+| Suite | Metric | Fine-tuned (v1) | Base Qwen3-4B |
+|---|---|---|---|
+| Synthetic held-out (60 cases, 6 task families, oracle context) | End-to-end correct | **90.0%** | 15.0% |
+| | Numeric accuracy | 90.7% | 9.3% |
+| | Formula accuracy | 96.3% | 9.3% |
+| | Context faithfulness (no invented numbers) | 100.0% | 40.7% |
+| | Missing-data handling | 83.3% | 66.7% |
+| | False refusals | 3.7% | 59.3% |
+| Real-world (21 questions on the sample MIS, full RAG pipeline, raw model) | End-to-end correct | **76.2%** | 9.5% |
+| | Numeric accuracy (answerable) | 94.1% | 0.0% |
+| | Context faithfulness | 100.0% | 47.1% |
+
+What the v1 failures show:
+- Questions about a month that is not in the file (4 real-world cases): the raw v1 model used another month's column. The assistant now answers these with a deterministic period guard before the model is called (it fires on exactly those 4 questions and none of the others), so the shipped pipeline would score 20/21 on this set; that guarded run has not been measured separately. The v2 data also teaches the model to refuse such questions itself.
+- LTV:CAC (3 synthetic cases): S&M taken from a quarterly summary table instead of the monthly rows. v2 data adds an explicit reasoning step for this.
+- One off-by-one column read (rw-12) and two false "data missing" refusals.
+
+Not yet measured: the v2 adapter (11 task families, lakh / crore units, multi-period; 110 synthetic + 31 real-world cases), and quantized GGUF vs adapter.
+
+Retrieval recall on the real-world questions: 100% (31/31: 26 on the sample MIS, 5 on a lakh-format copy) as of 2026-10-22.
 
 ## Limitations and risks
 

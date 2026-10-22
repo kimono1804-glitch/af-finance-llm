@@ -6,6 +6,70 @@ Entries before 14:09 on 2026-10-21 were reconstructed from file timestamps, git 
 
 ---
 
+## 2026-10-22 21:02 IST - Session paused for the day (state saved for tomorrow)
+- User asked to stop and continue tomorrow. Stopped: the v2 eval (pid 15048, base model at 5/141), the queued chain scripts (`run_eval_v2_after_train.sh`, `finish_eval_v2.sh`), watchdogs and keep-awake helpers. No GPU job running.
+- v2 eval cache: fine-tuned 141/141 done; removed rw-20, rw-21, rw-25, rw-26 from `outputs/eval_runs/fine_tuned_v2.jsonl` (ran with the old period preprocessing) -> 137 rows; full copy kept as `fine_tuned_v2.before_period_fix.jsonl`. `base_v2.jsonl` 5 rows. No time-limit hits. All rows parse.
+- `outputs/finish_eval_v2.sh` fixed before stopping (waits for the wrapper's exit line; keep-awake uses the Windows pid via `/proc/$$/winpid`); not needed tomorrow because the stale rows are already removed.
+- Resume checklist written to memory.md section 1 "Next steps": one eval command (cached cases skipped), then `--rescore`, compare, model card, switch default adapter, GGUF export + server eval.
+- Build progress unchanged today since 18:30: 85%.
+
+## 2026-10-22 20:59 IST - Period preprocessing fixes (relative phrases, grammar, quarter months)
+- v2 fine-tuned real-world run finished (old scorer: 127/141 overall). rl-01..rl-04 (lakh workbook) all OK incl. both from_lakh conversions (rl-03 LTV:CAC, rl-04 payback); rw-12 (v1's off-by-one column) now OK; rw-16..19 answered by the period guard.
+- rw-25 ("new customers in Q3 FY26") failed: the model mapped Q3 FY26 to Jul-Sep 25 (Indian FY Q3 = Oct-Dec) and called it YTD. Quarter -> month mapping is a calendar fact, so it moves to deterministic preprocessing like "last month".
+- Bug found while checking: `resolve_relative_periods` rewrote "previous month" / "the month before" to the data's second-latest month even when the question named a month. rw-26 reached the model as "in Feb-26 vs Feb-26?" (v2 still answered right from context); training-style MoM questions ("grow in Mar-26 versus the previous month?") would be corrupted the same way. It also left broken grammar ("What was CM2 Mar-26?", "the Feb-26").
+- `common/periods.py` `resolve_relative_periods`: month phrases are rewritten only when the question has no explicit month (quarter phrases: no explicit quarter); a leading "the" is part of the match and "in" is inserted when no preposition precedes (`_PREPOSITIONS`): "net revenue last month" -> "net revenue in Mar-26"; a quarter with no column in the data but all 3 months present is spelled out: "Q3 FY26" -> "Q3 FY26 (Oct-25, Nov-25, Dec-25)" with a note. Quarters that have a column (quarterly tables) or whose months are missing are untouched.
+- `tests/test_periods.py`: expectations updated to the grammatical form; new tests for explicit-month questions and quarter spelling. 101 fast tests pass; real-world retrieval recall 100% (31).
+- Not changed: v1 compat cases rw-20/rw-21 now get "in Mar-26" / "in Feb-26" wording (only matters if the v1 run is ever regenerated; re-scoring is unaffected).
+- Plan: after the v2 base run, delete rw-20, rw-21, rw-25, rw-26 from `outputs/eval_runs/fine_tuned_v2.jsonl` and `base_v2.jsonl`, rerun the same eval command (only those 4 x 2 run), then `--rescore` for the final v2 report.
+
+## 2026-10-22 20:46 IST - Scorer allows month counts 1-12
+- v2 eval rw-24 (YTD gross revenue FY26 to Dec-25): correct values, failed only because the report row says "Sum of 9 months" and 9 was not an allowed constant. The training template writes the month count in the report, so any YTD with 7, 9, 10 or 11 months would fail even for a perfect answer (the 30-per-task gold self-test had not drawn one).
+- `common/scoring.py` `ALLOWED_CONSTANTS` = {0, 0.5, 0.75, 14, 15, 18, 24, 40, 100} + integers 1-12.
+- Checks: gold self-test 100% on 200 multi-period cases and on all 11 tasks (30 each); 99 fast tests; v1 re-score: 0 changes.
+- v2 eval (old scorer, in process): fine-tuned 118/130 at 20:40; real-world rw-01..rw-11 all OK.
+
+## 2026-10-22 20:00 IST - Scorer: optional helper intermediates; eval_model --rescore
+- v2 eval, fine-tuned 72/81 at ~20:00. 6 of the 9 failures were burn multiple cases where only `gross_new_arr` was "missing": the v2 model computed net new ARR as closing ARR - opening ARR (an equally valid route; net new ARR 220,210 and burn multiple 2.19x correct in raft-1070000), so the bridge-route intermediate never appeared. Scorer false negatives, not model errors.
+- `common/scoring.py`: `Gold.optional` + `optional_from_steps(steps)`: helper-formula steps (total / difference / ratio / percent_of / margin_pct) whose result feeds only other helper steps. A miss on such a key is dropped from the checks; everything else is unchanged. In the v2 cases this covers `gross_new_arr` (burn multiple) and `revenue_leakage` (net revenue; leakage % stays required). `eval_model.synthetic_cases` sets it.
+- `eval_model.py --rescore`: no LLM; rebuilds the cases for the given flags, re-scores the cached run files with the current scorer, prints every end-to-end change, writes the report.
+- Checks: v1 run re-scored (`--rescore --v1-compat --tag v1`): 0 changes (v1 numbers stand). Scorer self-test 100% on all 11 tasks. Test `test_optional_intermediates` (closing-opening route passes, wrong answer still fails). 99 fast tests pass.
+- The running v2 eval process loaded the old scorer: after it finishes, run `eval_model.py --rescore --config configs/eval_v2.yaml --adapter qwen3_4b_finance_lora_v2 --tag v2 --models both` for the final report.
+
+## 2026-10-22 18:30 IST - v2 adapter trained; v2 eval running
+- v2 training finished 17:19 (exit 0; harmless resource_tracker traceback): 338/338 steps, 1 epoch, train runtime 326.5 min (incl. the 66-min standby pause), peak VRAM 6.19 GB. Loss 1.253 (step 5) -> 0.38 (20) -> 0.089 (40) -> 0.018 (100) -> ~0.012-0.014 (150-275) -> 0.0098 (300) -> 0.0095-0.0118 (320-335). Same shape as v1, ending at the same level (~0.01).
+- Saved `qwen3_4b_finance_lora_v2/` (adapter_model.safetensors 264 MB, tokenizer, chat_template.jinja, loss_history.json, loss_curve.png, `contract.json` = {"contract": "v2", "prompt_version": "5c6b089a25"}). Checkpoints in `outputs/v2/`.
+- The laptop went into Modern Standby again between the end of training (keep-awake helper ended with the training pid) and 18:29 (Kernel-Power 507 exit at 18:29:36), so the queued eval started at 18:29 instead of ~17:20. The eval process blocks sleep itself (boost_process: "sleep blocked while running"). Lesson: a chain script must hold the keep-awake across the hand-off.
+- `eval_model.py --config configs/eval_v2.yaml --adapter qwen3_4b_finance_lora_v2 --tag v2 --models both` running since 18:29 (log `outputs/eval_v2_log.txt`); watchdog `outputs/watch_eval_v2.sh` (git-ignored).
+
+## 2026-10-22 16:13 IST - v2 eval queued behind training
+- v2 training progress: step 250/338, loss 0.0121 (step 50: 0.057, 75: 0.035, 100: 0.018, 125: 0.014, 150: 0.014, 175: 0.017, 200: 0.012, 225: 0.014). `outputs/v2/checkpoint-50 ...` saved without stalls. ETA ~17:30.
+- New `outputs/run_eval_v2_after_train.sh 8436` (git-ignored), started in the background: waits for the training to exit; only if the log says exit code 0 and `qwen3_4b_finance_lora_v2/` has `adapter_config.json` + `contract.json`, runs `eval_model.py --config configs/eval_v2.yaml --adapter qwen3_4b_finance_lora_v2 --tag v2 --models both` (fine-tuned then base; 110 synthetic + 31 real-world; est. ~3 h + ~4.5 h). Log `outputs/eval_v2_log.txt`. The eval process blocks sleep itself (`boost_process`).
+- Watchdog now reports loss every 25 steps only.
+
+## 2026-10-22 13:18 IST - v2 training paused 66 min by Modern Standby; keep-awake fix
+- Step 21 of the v2 run took ~67 min (12:08-13:15). Windows event log: Kernel-Power 506 "entering Modern Standby" 12:08:20, 507 "exiting" 13:14:41. The laptop slept; training resumed by itself at normal speed (steps 22-23 ~40 s). Not a VRAM spill. Loss so far: 1.253 (step 5), 0.799 (10), 0.51 (15), 0.3825 (20).
+- Current run: `outputs/keep_awake.ps1 -ProcessId 8436` (git-ignored) started in the background at 13:17: holds `SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)` until the training exits; no power settings changed. Closing the lid can still sleep.
+- Permanent: `common/winperf.py` `boost_process()` now also blocks idle sleep for the life of the process (same API; prints "sleep blocked while running"). Applies to run_assistant / eval_model / train_qwen3 / export.
+- Watchdog `outputs/watch_train_v2.sh` rewritten: tqdm's s/it is a smoothed average (one 67-min step kept it at 600+ s/it for several steps, a false "slow" alarm), so it now alerts only when the step counter has not moved for 10 min; prints only new loss values.
+- New ETA: ~17:20 IST (315 steps x ~46 s from 13:16).
+
+## 2026-10-22 11:57 IST - v2 training running normally
+- `train_qwen3.py --config configs/train_v2.yaml` (pid 8436): 2,700 train / 300 test examples, 2 dropped (> 6,144 tokens), masking check 576/3,264 tokens of example 0 carry loss, 338 steps, 45-47 s/step -> ETA ~4 h 15 min (about 16:15 IST). VRAM 6.0 GB used, GPU 100%.
+- The training process shows 1.8 GB of Windows "shared GPU memory", but step time equals healthy v1 training (~46 s), so it is not on the hot path. Watchdog `outputs/watch_train_v2.sh` (git-ignored) reports loss values, flags steps slower than 120 s (spill signature), errors and the finish.
+
+## 2026-10-22 11:52 IST - v1 evaluation complete; model card filled; v2 training started
+- `eval_model.py --models both --n-per-task 10 --tag v1 --v1-compat` finished 11:51 (exit 0; the traceback at exit is the known harmless multiprocess resource_tracker message). No time-limit hits after the compat relaunch. Report `reports/eval_2026-10-22_v1.md`.
+- Synthetic (60 cases, oracle context), fine-tuned vs base: end-to-end 90.0% vs 15.0%; numeric 90.7% vs 9.3%; formula 96.3% vs 9.3%; faithfulness 100% vs 40.7%; missing-data 83.3% vs 66.7%; edge cases 100% vs 66.7%; false refusals 3.7% vs 59.3%; latency 147 s vs 139 s per case. Fine-tuned by task: break_even, contribution_margin, net_revenue 100%; payback 90%; ebitda 80%; ltv_cac 70%.
+- Real-world (21, RAG, raw model, no guard): end-to-end 76.2% vs 9.5%; numeric 94.1% vs 0%; faithfulness 100% vs 47.1%; missing-period 0/4 vs 2/4. Fine-tuned failures: rw-12 (column off by one) + rw-16..19 (absent month). With the deterministic period guard (fires on exactly rw-16..19) the pipeline would be 20/21; not measured as a separate run.
+- Base model: mostly no calculator call (false refusals 59-65%), invented numbers.
+- `MODEL_CARD.md`: evaluation section filled with these numbers and the failure analysis.
+- 11:51 v2 training started automatically (`outputs/run_v2_after_eval.sh`), log `outputs/train_v2_log.txt`.
+
+## 2026-10-22 11:24 IST - v2 training queued behind the v1 eval
+- New `outputs/run_v2_after_eval.sh <pid>` (git-ignored): waits until the v1 eval process (pid 26968) exits, then runs `train_qwen3.py --config configs/train_v2.yaml`; log `outputs/train_v2_log.txt` (start line, trainer output, exit code). Started in the background by Claude at 11:24. No separate 5-step smoke test: the full run fails just as early on setup errors.
+- Expected: ~375 steps (3,000 examples, 2 dropped as too long, 1 epoch, effective batch 8) at ~46 s/step = ~4.5-5 h; adapter -> `qwen3_4b_finance_lora_v2/` with `contract.json`.
+- v1 eval at 11:24: base 65/81 cached, ~16 cases left (~25 min).
+
 ## 2026-10-22 11:20 IST - QoQ variant; v2 dataset regenerated
 - `generate_raft_data.py`: `QOQ_METRICS` (net revenue, S&M spend, ending customers) and `_plan_qoq`: quarter-on-quarter change + `growth_pct` read directly from the quarterly summary (current quarter = latest 70%, else an earlier one). `plan_multi_period` uses it 20% of the time when >= 2 fiscal quarters exist. Variant `qoq:<key>`; quarter periods, so no period-gap examples; ending customers is a count (no lakh note).
 - `dataset_v2.jsonl` regenerated: 3,000 examples, 0 mismatches; multi_period variants in the 3,000 trial: mom 153, range_total 39, qoq 37, average 33, ytd 24. Tokens median 3,511, p90 4,773, max 6,204 (2 over 6,144).

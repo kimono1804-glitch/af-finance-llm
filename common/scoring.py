@@ -34,7 +34,8 @@ ALTERNATIVES: dict[str, set[str]] = {
 # Numbers that legitimately appear in reports without coming from the context or the tool
 # (benchmarks and thresholds in the CFO take, metric names like CM1/CM2/CM3).
 # template thresholds: runway 6/12/18 mo, magic number 0.5/0.75, gross margin 40%, payback 12/24, LTV:CAC 1/3x, ...
-ALLOWED_CONSTANTS = {0.0, 0.5, 0.75, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 12.0, 14.0, 15.0, 18.0, 24.0, 40.0, 100.0}
+# Month counts 1-12 are allowed too: multi-period reports say "Sum of 9 months" (YTD Apr-Dec).
+ALLOWED_CONSTANTS = {0.0, 0.5, 0.75, 14.0, 15.0, 18.0, 24.0, 40.0, 100.0} | {float(n) for n in range(1, 13)}
 
 MISSING_WORDS = ("missing", "not in the provided", "not provided", "not available", "not found",
                  "cannot compute", "can't compute", "no data", "does not appear", "not included")
@@ -55,6 +56,9 @@ class Gold:
     missing: str | None = None                     # name of the missing input (missing-data cases)
     missing_keywords: list[str] = field(default_factory=list)       # words the refusal must mention
     edge_cases: list[str] = field(default_factory=list)
+    # Helper intermediates (a total / difference that only feeds a later step). An equivalent route may skip them
+    # (net new ARR = closing - opening instead of new + expansion - churned), so a miss here is not an error.
+    optional: set[str] = field(default_factory=set)
 
 
 def _close(a: float, b: float) -> bool:
@@ -63,6 +67,25 @@ def _close(a: float, b: float) -> bool:
 
 def _numbers(text: str) -> list[float]:
     return [abs(float(m.replace(",", ""))) for m in _NUM_RE.findall(text)]
+
+
+def optional_from_steps(steps: list[dict[str, Any]]) -> set[str]:
+    """Ids of helper-formula steps used only by other helper steps: plumbing such as gross new ARR on the way to
+    net new ARR. A helper result that feeds a named formula (net new ARR -> burn_multiple) stays required."""
+    consumers: dict[str, set[str]] = {}
+
+    def walk(v: Any, formula: str) -> None:
+        if isinstance(v, str) and v.startswith("@"):
+            consumers.setdefault(v[1:], set()).add(formula)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x, formula)
+
+    for s in steps:
+        for v in (s.get("inputs") or {}).values():
+            walk(v, s["formula"])
+    return {s["id"] for s in steps if s["formula"] in HELPER_FORMULAS and s["id"] in consumers
+            and consumers[s["id"]] <= HELPER_FORMULAS}
 
 
 def required_formulas_from_steps(steps: list[dict[str, Any]]) -> list[set[str]]:
@@ -133,6 +156,9 @@ def score(trace: dict[str, Any], gold: Gold) -> dict[str, Any]:
                 hits[key] = True
                 hit_display[key] = r["display"]
                 break
+    for k in gold.optional:  # an intermediate the model skipped via an equivalent route
+        if hits.get(k) is False:
+            del hits[k]
     expected_errors = [k for k, v in gold.truth.items() if v is None]
     errors_handled = (not expected_errors) or any(w in low for w in ERROR_WORDS)
 
