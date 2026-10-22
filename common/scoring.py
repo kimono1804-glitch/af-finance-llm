@@ -33,7 +33,8 @@ ALTERNATIVES: dict[str, set[str]] = {
 
 # Numbers that legitimately appear in reports without coming from the context or the tool
 # (benchmarks and thresholds in the CFO take, metric names like CM1/CM2/CM3).
-ALLOWED_CONSTANTS = {0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 8.0, 12.0, 14.0, 15.0, 24.0, 100.0}
+# template thresholds: runway 6/12/18 mo, magic number 0.5/0.75, gross margin 40%, payback 12/24, LTV:CAC 1/3x, ...
+ALLOWED_CONSTANTS = {0.0, 0.5, 0.75, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 12.0, 14.0, 15.0, 18.0, 24.0, 40.0, 100.0}
 
 MISSING_WORDS = ("missing", "not in the provided", "not provided", "not available", "not found",
                  "cannot compute", "can't compute", "no data", "does not appear", "not included")

@@ -27,7 +27,8 @@ import yaml
 
 from common.audit import unsupported_inputs
 from common.periods import missing_periods, period_not_available_report, resolve_relative_periods
-from common.prompts import SYSTEM_PROMPT, TOOLS, build_user_message, parse_tool_calls, split_think, strip_tool_calls
+from common.prompts import (CONTRACT, SYSTEM_PROMPT, adapter_contract, build_tools, build_user_message,
+                            parse_tool_calls, split_think, strip_tool_calls)
 from common.tools import run_tool_call
 from ingest_financials import ingest_paths
 from rag_pipeline import HybridRetriever
@@ -47,8 +48,10 @@ RULE = "=" * 100
 class FinanceLLM:
     """Qwen3 + LoRA adapter (falls back to the base model if no adapter is found)."""
 
-    def __init__(self, adapter_dir: Path | None, base_model: str, max_seq_length: int = 8192):
-        """adapter_dir=None loads the base model on purpose (used for base-vs-fine-tuned evaluation)."""
+    def __init__(self, adapter_dir: Path | None, base_model: str, max_seq_length: int = 8192,
+                 contract: str | None = None):
+        """adapter_dir=None loads the base model on purpose (used for base-vs-fine-tuned evaluation).
+        contract: prompt contract (tool list) to show the model; default = what the adapter was trained on."""
         from unsloth import FastLanguageModel
 
         if adapter_dir is not None and (adapter_dir / "adapter_config.json").exists():
@@ -63,6 +66,9 @@ class FinanceLLM:
         self.model, self.tokenizer = FastLanguageModel.from_pretrained(
             model_name=name, max_seq_length=max_seq_length, load_in_4bit=True, dtype=None)
         FastLanguageModel.for_inference(self.model)
+        fine_tuned = adapter_dir is not None and (adapter_dir / "adapter_config.json").exists()
+        self.contract = contract or adapter_contract(adapter_dir if fine_tuned else None)
+        self.tools = build_tools(self.contract)
         self.max_time: float | None = None      # seconds per generate() call; None = no limit
         self.log_rounds = False                 # print tokens / seconds for every generate() call
         self.last_stats: dict[str, float] = {}
@@ -72,7 +78,7 @@ class FinanceLLM:
 
         import torch
 
-        prompt = self.tokenizer.apply_chat_template(messages, tools=TOOLS, add_generation_prompt=True,
+        prompt = self.tokenizer.apply_chat_template(messages, tools=self.tools, add_generation_prompt=True,
                                                     enable_thinking=True, tokenize=False)
         inputs = self.tokenizer(prompt, return_tensors="pt", add_special_tokens=False).to(self.model.device)
         sampling = dict(do_sample=True, temperature=temperature, top_p=0.95, top_k=20) if temperature > 0 else dict(do_sample=False)
@@ -101,8 +107,10 @@ class ServerLLM:
     (<think>...</think> + <tool_call>{...}</tool_call>), so the rest of the pipeline is identical to local mode.
     """
 
-    def __init__(self, url: str, model: str, timeout: float = 600.0):
+    def __init__(self, url: str, model: str, timeout: float = 600.0, contract: str = CONTRACT):
         self.url = url.rstrip("/") + "/chat/completions"
+        self.contract = contract
+        self.tools = build_tools(contract)
         self.model = model
         self.timeout = timeout
         self.label = f"server ({model} @ {url})"
@@ -139,7 +147,7 @@ class ServerLLM:
     def generate(self, messages: list[dict[str, Any]], max_new_tokens: int, temperature: float) -> str:
         import urllib.request
 
-        body = {"model": self.model, "messages": self.to_openai(messages), "tools": TOOLS,
+        body = {"model": self.model, "messages": self.to_openai(messages), "tools": self.tools,
                 "max_tokens": max_new_tokens, "temperature": temperature, "top_p": 0.95}
         req = urllib.request.Request(self.url, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
@@ -243,6 +251,8 @@ def main() -> None:
     ap.add_argument("--server-url", default="http://localhost:8080/v1")
     ap.add_argument("--server-model", default="af-finance-qwen3-4b")
     ap.add_argument("--retrieval-only", action="store_true")
+    ap.add_argument("--contract", choices=["v1", "v2"], default=None,
+                    help="prompt contract (tool list); default = the one the configured adapter was trained on")
     ap.add_argument("--show-context", action="store_true", help="print full retrieved chunk text")
     args = ap.parse_args()
     from common.winperf import boost_process
@@ -257,7 +267,8 @@ def main() -> None:
 
     llm = None
     if not args.retrieval_only and args.backend == "server":
-        llm = ServerLLM(args.server_url, args.server_model)
+        llm = ServerLLM(args.server_url, args.server_model,
+                        contract=args.contract or adapter_contract(ROOT / train_cfg["adapter_dir"]))
     elif not args.retrieval_only:
         import torch
 
@@ -265,7 +276,7 @@ def main() -> None:
             sys.exit("CUDA GPU not available; use --retrieval-only or install CUDA torch.")
         torch.manual_seed(train_cfg["seed"])
         adapter = Path(args.adapter) if args.adapter else ROOT / train_cfg["adapter_dir"]
-        llm = FinanceLLM(adapter, train_cfg["model_name"])
+        llm = FinanceLLM(adapter, train_cfg["model_name"], contract=args.contract)
 
     known_periods = {p for c in chunks for p in c.metadata.periods}
     for asked in args.question or DEMO_QUESTIONS:

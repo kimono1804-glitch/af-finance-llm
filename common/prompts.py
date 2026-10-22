@@ -5,12 +5,14 @@ Changing anything here changes what the model was trained on: regenerate the dat
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
-from common.tools import TOOL_NAME, formula_signatures
+from common.tools import TOOL_NAME, V1_FORMULAS, formula_signatures
 
 SYSTEM_PROMPT = (
     "You are a startup CFO assistant. Answer only from the figures inside <financial_context>.\n"
@@ -22,19 +24,39 @@ SYSTEM_PROMPT = (
     "After the tool returns, write the final CFO report as Markdown, copying the tool's display values exactly."
 )
 
-TOOL_DESCRIPTION = (
+# Prompt contract. "v1" = what the v1 adapter (qwen3_4b_finance_lora, 2026-10-21) was trained on; "v2" adds unit
+# conversion. A trained adapter records its contract in <adapter>/contract.json (train_qwen3.py); adapters
+# without that file are v1.
+CONTRACT = "v2"
+CONTRACTS = ("v1", "v2")
+
+_DESC_HEAD = (
     "Deterministic finance calculator. Send ordered steps; each step applies one formula. "
     "Inputs are numbers copied from the context (no thousands separators), '@step_id' to reuse an earlier "
     "step's result, or lists of those for list inputs. Append _pct to an input name to pass a percentage as "
-    "written (churn_rate_pct: 3.5 means 3.5%). Formulas:\n" + formula_signatures()
+    "written (churn_rate_pct: 3.5 means 3.5%). "
+)
+_DESC_UNITS = (
+    "Amounts stay in the units their table states (e.g. INR lakh). Before combining amounts in lakh / crore / "
+    "thousands / millions with plain amounts or counts, convert them with from_lakh / from_crore / "
+    "from_thousands / from_millions. "
 )
 
-TOOLS: list[dict[str, Any]] = [
-    {
+
+def tool_description(contract: str = CONTRACT) -> str:
+    if contract == "v1":
+        return _DESC_HEAD + "Formulas:\n" + formula_signatures(V1_FORMULAS)
+    return _DESC_HEAD + _DESC_UNITS + "Formulas:\n" + formula_signatures()
+
+
+def build_tools(contract: str = CONTRACT) -> list[dict[str, Any]]:
+    if contract not in CONTRACTS:
+        raise ValueError(f"unknown prompt contract {contract!r}")
+    return [{
         "type": "function",
         "function": {
             "name": TOOL_NAME,
-            "description": TOOL_DESCRIPTION,
+            "description": tool_description(contract),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -54,8 +76,27 @@ TOOLS: list[dict[str, Any]] = [
                 "required": ["steps"],
             },
         },
-    }
-]
+    }]
+
+
+TOOLS: list[dict[str, Any]] = build_tools()
+TOOL_DESCRIPTION = tool_description()
+
+
+def prompt_version(contract: str = CONTRACT) -> str:
+    """Hash of the system prompt + tool schema; stored in every dataset row (meta.prompt_version)."""
+    return hashlib.sha1((SYSTEM_PROMPT + json.dumps(build_tools(contract), sort_keys=True)).encode()).hexdigest()[:10]
+
+
+def adapter_contract(adapter_dir: str | Path | None) -> str:
+    """Contract an adapter was trained on: <adapter>/contract.json, else v1 (adapters trained before it existed).
+    No adapter (base model) -> the current contract."""
+    if adapter_dir is None:
+        return CONTRACT
+    f = Path(adapter_dir) / "contract.json"
+    if f.exists():
+        return json.loads(f.read_text(encoding="utf-8"))["contract"]
+    return "v1"
 
 
 def build_context(chunks: Sequence[str]) -> str:

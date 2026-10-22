@@ -181,6 +181,10 @@ def main() -> None:
     model.save_pretrained(str(adapter_dir))
     tokenizer.save_pretrained(str(adapter_dir))
     save_loss_curve(trainer.state.log_history, adapter_dir)
+    from common.prompts import CONTRACT, prompt_version
+
+    (adapter_dir / "contract.json").write_text(json.dumps({"contract": CONTRACT, "prompt_version": prompt_version()}),
+                                               encoding="utf-8")
     print(f"saved LoRA adapters -> {adapter_dir}")
 
 

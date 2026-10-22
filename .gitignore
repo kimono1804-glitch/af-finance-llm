@@ -36,6 +36,7 @@ desktop.ini
 outputs/
 qwen3_4b_finance_lora/
 *_lora/
+*_lora_v*/
 merged_*/
 gguf/
 *.gguf

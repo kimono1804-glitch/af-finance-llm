@@ -6,6 +6,81 @@ Entries before 14:09 on 2026-10-21 were reconstructed from file timestamps, git 
 
 ---
 
+## 2026-10-22 11:20 IST - QoQ variant; v2 dataset regenerated
+- `generate_raft_data.py`: `QOQ_METRICS` (net revenue, S&M spend, ending customers) and `_plan_qoq`: quarter-on-quarter change + `growth_pct` read directly from the quarterly summary (current quarter = latest 70%, else an earlier one). `plan_multi_period` uses it 20% of the time when >= 2 fiscal quarters exist. Variant `qoq:<key>`; quarter periods, so no period-gap examples; ending customers is a count (no lakh note).
+- `dataset_v2.jsonl` regenerated: 3,000 examples, 0 mismatches; multi_period variants in the 3,000 trial: mom 153, range_total 39, qoq 37, average 33, ytd 24. Tokens median 3,511, p90 4,773, max 6,204 (2 over 6,144).
+- `tests/test_multi_period.py`: qoq branch; sample raised to 300 examples so every variant appears. 98 fast tests pass; scorer self-test 100% on all 11 tasks.
+- `MODEL_CARD.md`: v2 training-data capabilities, units and prompt-contract limitations, retrieval recall 31/31 (eval numbers still pending).
+
+## 2026-10-22 11:17 IST - Messy Excel layouts: stacked tables, numbers as text, transposed tables, currency titles
+- Probe workbook (scratchpad `messy_mis.py`) showed 5 failures in the old Excel ingester: text numbers passed raw ("1,23,456.50", "(12,345.00)" - a parenthesised negative could reach the calculator as positive); a second table on the same sheet was not detected (its header became a data row); dates inside data cells printed as "2026-01-01 00:00:00"; a months-down-the-rows table had no periods; "(INR)" in a title gave no units.
+- `ingest_financials.py` Excel rewrite: `_excel_blocks` (every row with >= 2 period cells is a table header; label-only rows right above a later header, after a blank line, are its title rows; no period header -> old single-table fallback `_header_row`); `_is_period`; `parse_number_text` (`_NUM_TEXT_RE`: Indian 12,34,567 and western 1,234,567 grouping, decimals, (parentheses) / leading minus negatives, optional ₹ / Rs. / INR / $ / USD; "12,34" rejected); `_cell_text` (dates -> Mon-YY, number text -> plain number); months-down-the-rows tables transposed to `Line Item | Jan-26 | ...`; columns with no header that are empty within a table are dropped; later tables inherit a sheet-wide units note unless their title reads like KPIs (`NON_MONEY_TITLE_RE`); plain currency fallback; duplicate chunk ids get a `::k` suffix.
+- `common/units.py`: `detect_currency` / `first_currency` ("Cash Summary (INR)", "Amounts in USD", "Currency: INR").
+- Regression guard: ingestion output for the sample workbook and the lakh workbook is byte-identical to before the rewrite (all 22 chunks: ids, text, metadata).
+- Bash heredoc gotcha hit again: `\b` in the new `_CUR_ONLY` regex became backspace bytes; fixed with a byte-level script (scratchpad `fix_backspace.py`). Also repaired two pre-existing stray backspace bytes in the docs (Changelog 2026-10-21 16:55 entry, memory.md section 3 grep hint). Repo scan for control bytes is clean.
+- Tests: `tests/test_messy_excel.py` (9 number-text cases, currency detection, the messy workbook end to end). 98 fast + 1 slow pass. Real-world retrieval recall 100% (31). Compat re-score unchanged.
+
+## 2026-10-22 11:06 IST - v2 training prepared (config, dataset, eval config); --adapter; export records the contract
+- `configs/train_v2.yaml` (new): `dataset_v2.jsonl`, `output_dir: outputs/v2`, `adapter_dir: qwen3_4b_finance_lora_v2`, 1 epoch, `eval: false`; everything else as v1 (r32, lr 2e-4, bs 1 x ga 8, max_seq_length 6144). `configs/train.yaml` unchanged (still the v1 adapter, which eval/run_assistant/export use by default).
+- `dataset_v2.jsonl` generated (`generate_raft_data.py --n 3000 --output dataset_v2.jsonl`): 3,000 examples, 11 tasks, contract v2, 0 mismatches; tokens median 3,503, p90 4,773, max 6,204 (2 over 6,144 -> dropped by training). `dataset.jsonl` (v1) kept.
+- `configs/eval_v2.yaml` (new): `tasks: null` (all 11), `n_per_task: 10`.
+- `eval_model.py`: `--adapter DIR` (default train.yaml adapter_dir); the contract default and report header use it.
+- `export.py`: writes `exports/contract.json` ({contract, prompt_version, adapter}); SERVING.md tells the user to pass `--contract <c>` in server mode.
+- `.gitignore`: `*_lora_v*/` (the v2 adapter dir was not covered by `*_lora/`).
+- README: v2 data / train / eval commands.
+
+## 2026-10-22 11:04 IST - Lakh-format sample MIS + 5 real-world lakh cases
+- `make_sample_mis.py`: `LAKH`, `LAKH_KEYS` (all P&L rows + cash rows), `build_data_lakh()` (those rows / 100,000, 2 decimals; net income and the cash roll-forward recomputed on the rounded numbers), `build_workbook(out, lakh=False)`, CLI `--lakh`. Lakh workbook: P&L units row "INR (₹ in lakhs)", cash sheet units only in its title "Cash Position (Rs. in Lakhs)", money format `#,##0.00`, unit economics in INR WITHOUT the "Total S&M Spend" row (so CAC needs the lakh marketing rows + `from_lakh`).
+- `eval_cases.py`: `build_lakh_cases()` rl-01 net revenue Mar-26, rl-02 EBITDA Feb-26, rl-03 LTV:CAC Jan-26 (requires from_lakh; CAC ~INR per customer), rl-04 payback Feb-26 (requires from_lakh), rl-05 average payroll Jan-26..Mar-26 (lakh). All `edge_cases` include `scaled_units`.
+- `eval_model.py`: `realworld_cases` builds `outputs/sample_startup_mis_lakh.xlsx` fresh each run and evaluates groups (main workbook, lakh workbook) with one retriever re-indexed per file (`_realworld_group`). `--v1-compat` skips the lakh group (and rw-22+).
+- Checks: retrieval recall 100% on all 31 real-world cases; ingested units: Revenue / Bank "INR lakh" (units-row normalisation and title fallback both work), Customer Metrics "INR unless stated"; compat re-score unchanged; scorer self-test 100%.
+- Tests: `test_lakh_sample_workbook_units_and_cases` (units per section, no S&M row, identities, finite truths, CAC magnitude). 87 fast tests pass.
+- Eval progress: base 55/81 (21 of 47 reruns done at 11:04), no time-limit hits since the compat relaunch.
+- README: real-world suite description (31 cases, lakh workbook).
+
+## 2026-10-22 10:52 IST - Multi-period task family; 5 real-world multi-period cases; scorer thresholds fixed
+- `common/formulas.py`: `growth_pct(current, prior)` = (current - prior) / |prior| (error if prior is 0), `average(values)` (error if empty). `common/tools.py`: registered (`growth_pct` percent; `average` currency, list input). Contract v2 only: v1 tool list unchanged (still `2013a079fb`); v2 prompt version now `5c6b089a25`.
+- `generate_raft_data.py`: task `multi_period` (`plan_multi_period`, `MP_METRICS`, `_mp_table`, `fy_start_index`). Metrics: gross revenue, COGS, performance marketing, payroll, new customers (flows) + closing ARR, closing cash, active customers (stocks, MoM only). Variants: `mom` (difference + growth_pct vs the previous month), `range_total` (total over the 3-6 months ending P), `average` (total + average), `ytd` (Indian FY from April to P). Variant string `<variant>:<metric>`. Questions name only the end period, so period-gap examples work. `Plan.money_in_stmt_units` (False for count metrics: no lakh note / header). `STATEMENT_TASKS` += multi_period.
+- `configs/data.yaml`: `task_weights.multi_period: 1.25`.
+- `eval_cases.py`: rw-22 (gross revenue growth Mar-26 vs Feb-26), rw-23 (average monthly payroll Jan-26 to Mar-26), rw-24 (YTD gross revenue FY26 up to Dec-25), rw-25 (new customers in Q3 FY26 = Oct-Dec total), rw-26 (active customers % change Feb-26 vs the month before). Worded unlike the training templates. `V1_CASE_IDS` (rw-01..rw-21); `eval_model.realworld_cases(..., v1_compat)` keeps only those under `--v1-compat`. Retrieval recall 100% on all 26; the period guard does not fire on the new ones.
+- `common/scoring.py`: `ALLOWED_CONSTANTS` += 0.5, 0.75, 6, 18, 40 (template thresholds). The gold self-test had only ever run on the 6 v1 tasks; over all 11 tasks it flagged correct magic-number / runway reports (0.75 / 0.5 / 6 in the CFO take) as unfaithful (95.2% end-to-end). Now 100% on 330 gold cases (30 per task). Re-scoring the stored v1 rows: no pass/fail change (one base row's hallucinated-number list shrinks).
+- Trial: 3,000 examples incl. 286 multi_period (mom 169, average 48, range_total 46, ytd 23; 25 missing), 0 mismatches.
+- Tests: `tests/test_multi_period.py` (formulas; 120 examples validate; each variant uses the right formulas; YTD starts in April). 86 fast tests pass.
+- README: multi-period task list; real-world suite is 26 cases.
+
+## 2026-10-22 10:43 IST - v1 eval made reproducible; v2 data: phrasing, quarterly note, lakh/crore units; prompt contracts
+**Evaluation (v1)**
+- Last night's base run stopped at 46/81 (~00:58; laptop off). Slowdowns came back after the manual 22:55 pin (many turns ~6 tok/s; affinity alone was not enough, power throttling was still on). 12 base cases had hit the 240 s limit: raft-1000004, 1010001, 1010002, 1020004, 1020005, 1020006, 1030002, 1030003, 1030005, 1030006, 1040004, 1040005. Removed them from `outputs/eval_runs/base_v1.jsonl` (backup `base_v1.backup_2026-10-22.jsonl`) so they rerun; greedy decoding makes all other rows speed-independent.
+- 10:14 resume was stopped after ~5 min (no rows written): the restart loaded the post-22:55 code, so the base model would have been scored on different inputs than the fine-tuned model (row-decimal rendering, missing cases turned into period-gap cases, period guard on for real-world).
+- New `eval_model.py --v1-compat`: `common.tables.ALIGN_ROW_DECIMALS = False`, data cfg `compat_v1: true` (no period gaps / question variation / quarterly note / scaled units), period guard off, prompt contract v1. Verified by rebuilding the cases and re-scoring every stored trace: 81/81 fine-tuned (incl. 21 real-world) and all cached base rows reproduce exactly (0 differences); without the flag 2 missing cases change.
+- 10:22 relaunched `eval_model.py --models both --n-per-task 10 --tag v1 --v1-compat` (log `outputs/eval_v1_log.txt`). CPU boost active from the start: steady 15.9-16.1 tok/s. raft-1020005 now passes (was a time-limit FAIL).
+
+**Prompt contracts** (so the v1 adapter keeps seeing exactly what it was trained on)
+- `common/tools.py`: `V1_FORMULAS` (the 25 original formulas); `formula_signatures(names)`.
+- `common/prompts.py`: `CONTRACT = "v2"`, `tool_description(contract)`, `build_tools(contract)`, `prompt_version(contract)`, `adapter_contract(adapter_dir)` (reads `<adapter>/contract.json`; missing file = v1; no adapter = current). v1 hash reproduces `2013a079fb` (the v1 dataset's version; pinned by a test). v2 = `553efd71f4`; v2 tool description adds a units sentence + 4 conversion formulas.
+- `run_assistant.py`: `FinanceLLM(..., contract=None)` uses the adapter's contract; `ServerLLM(..., contract=)`; `--contract v1|v2` (default: the configured adapter's). `eval_model.py`: `--contract`; base model gets the same contract as the adapter it is compared with; report header shows the contract.
+- `train_qwen3.py`: writes `<adapter>/contract.json` (`contract`, `prompt_version`) after training.
+- `generate_raft_data.py`: `PROMPT_VERSION = prompt_version()` (v2). The on-disk v1 `dataset.jsonl` is now stale for training (expected; regenerate for v2).
+
+**Calculator**: `common/formulas.py` `UNIT_FACTORS`, `to_base_units`, `from_lakh`, `from_crore`, `from_thousands`, `from_millions`; registered in `REGISTRY` (currency).
+
+**Generator (v2 data)**
+- `vary_question` + `EXTRA_QUESTIONS` (3-5 extra founder phrasings per task except break-even), `Q_PREFIXES` / `Q_SUFFIXES`, casual lower-casing, dropped "?"; own rng stream (`question|seed|idx`). 3,000 trial: ~1,800 distinct question forms.
+- Quarterly-summary distractor note in `<think>` for month tasks ("[k] has quarter totals ...; I need <month> monthly figures") - targets the v1 LTV:CAC failure (quarterly S&M used as monthly). In 539/2,723 tool examples.
+- Lakh / crore statements: `configs/data.yaml` `scaled_units: 0.2`; own rng stream (`units|seed|idx`). `scale_company` (P&L, cash, ARR, quarterly, working capital, one-offs in INR lakh / INR crore (if gross revenue >= 3 crore in every window month, 50%) / USD thousands; 2 decimals; derived rows recomputed so identities hold); `Company.money_unit/money_units/money_factor/stmt_units`; `NON_MONEY_KEYS` (counts, ARPU, %, unit-economics S&M stay plain). LTV:CAC / payback with S&M summed from a scaled P&L: `total` -> `from_<unit>` -> `cac` (sm given probability 0.25 for scaled companies so the conversion case is common: 88 per 3,000). Statement tasks report `Currency: INR lakh` and get a units note; P&L-derived gross margin notes that units cancel.
+- Inputs quoted in `<think>` now use the exact rendered cell (`Table.cell`, incl. row-decimal alignment): "3.00", not "3".
+- Bug fixed (pre-existing): a missing-data example that deleted a whole row (magic number: both quarters of Net Revenue on one row) still quoted the other quarter's value from the deleted row. `apply_missing` now blanks only the cell when another input shares the row.
+- `validate_example`: every quoted input must be a cell of that row in the context.
+- Trial: 3,000 examples, 0 mismatches; 620 scaled-unit companies (302 USD thousands, 262 INR lakh, 52 INR crore); 14,629 quoted inputs all verbatim.
+
+**Ingestion**
+- New `common/units.py`: `detect_units` ("₹ in lakhs", "Rs. Lakh", "INR Cr", "USD '000", "$000s", "($ in millions)", "All figures in crores" -> "INR lakh" / "INR crore" / "USD thousands" / "USD millions"; never bare k/m/cr without a currency; lakh/crore only with INR), `first_units`.
+- `ingest_financials.py`: Excel normalises `Units:` rows and falls back to title rows / header cells / sheet name; PDF tables get units from caption/headers/section, else the last 3 text items of the section, else a document-wide units statement (`UNITS_CUE_RE`: only text that reads like a units statement). PDFs previously had no units at all.
+
+**Tests**: `tests/test_units_contract.py` (new: formulas, calculator conversion, frozen v1 contract, adapter_contract, scaled examples for every task, misquoted-input detection, 16 unit phrasings, Excel title units); `tests/test_dataset.py` (+question variation, compat has no period gaps, quarterly note). 84 fast + 1 slow pass. Scorer self-test 100%. Real-world retrieval recall still 100%.
+
+**Docs**: README (eval `--v1-compat`, units in data and ingestion, prompt contracts, units.py in layout); memory.md sections 1, 3-8.
+
 ## 2026-10-21 23:08 IST - Session paused for the day
 - Renamed the `--gold` scorer self-test report to `reports/eval_2026-10-21_gold-selftest.md` so it is not mistaken for a model result.
 - User to commit and push. Base-model eval still running in the background (pid 32708, ~75 cases left, ~2.5 h); resume checklist in memory.md section 1.
@@ -82,7 +157,7 @@ Code was edited while the base-model eval was running; that process had already 
 ## 2026-10-21 16:55 IST - Varied period phrasing in questions; quarter normalisation; regex bug fixed
 - `generate_raft_data.py`: `MONTH_NAMES` + `say_period()`; `build_example` rewrites the period in the question (Mar-26 / March 2026 / Mar 2026 / Mar '26; Q4 FY26 / Q4 of FY26 / Q4 FY2026). Tables and reasoning keep the table label. Removed the ambiguous "April 25" style after spotting it in samples.
 - `rag_pipeline.py`: `normalize_periods` also maps `FY2026` -> `FY26` and `Q4 of FY26` -> `Q4 FY26` (`_FY_RE`, `_Q_OF_RE`).
-- Bug: the heredoc patch wrote literal backspace bytes instead of `` in those regexes; fixed with an exact edit; repo scanned, no other control characters.
+- Bug: the heredoc patch wrote literal backspace bytes instead of `\b` in those regexes; fixed with an exact edit; repo scanned, no other control characters.
 - `tests/test_ingest_rag.py`: normalisation asserts for "Mar '26", "March 2026", "Q4 of FY2026".
 - Checks: 50 tests pass; 1,500 v2 trial examples 0 mismatches; real-world retrieval recall 100%.
 - Training (resumed) at step 120/226, ~46 s/step, past the old stall point.

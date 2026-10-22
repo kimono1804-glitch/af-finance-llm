@@ -6,6 +6,7 @@ All numbers are deterministic (seeded). Derived rows (EBIT, Net Income, S&M tota
 are computed with common.formulas and stored as values, so readers that ignore Excel formulas still work.
 
 Usage:  python make_sample_mis.py [--out sample_startup_mis.xlsx]
+        python make_sample_mis.py --lakh --out outputs/sample_startup_mis_lakh.xlsx   (P&L and cash in INR lakh)
 """
 
 from __future__ import annotations
@@ -97,6 +98,25 @@ def build_data(seed: int = 7) -> dict[str, list[float]]:
     return d
 
 
+LAKH = 100_000
+# Rows shown in lakh in the --lakh workbook: every P&L line and the cash sheet. Unit economics stay in INR.
+LAKH_KEYS = [key for _, rows in PL_SECTIONS for _, key in rows] + ["opening_cash", "cash_in", "cash_out", "closing_cash"]
+
+
+def build_data_lakh(seed: int = 7) -> dict[str, list[float]]:
+    """build_data() with P&L and cash rows in INR lakh (2 decimals), as many Indian MIS packs report them.
+    Net income and the cash roll-forward are recomputed on the rounded numbers so they hold exactly."""
+    d = {k: list(v) for k, v in build_data(seed).items()}
+    for k in LAKH_KEYS:
+        d[k] = [round(v / LAKH, 2) for v in d[k]]
+    for t in range(len(MONTHS)):
+        d["net_income"][t] = round(d["ebit"][t] - d["interest"][t] - d["taxes"][t], 2)
+        if t > 0:
+            d["opening_cash"][t] = d["closing_cash"][t - 1]
+        d["closing_cash"][t] = round(d["opening_cash"][t] + d["cash_in"][t] - d["cash_out"][t], 2)
+    return d
+
+
 def _title(ws, title: str, units: str, extra: str | None = None) -> int:
     ws.append([title])
     ws["A1"].font = Font(bold=True, size=14)
@@ -132,18 +152,22 @@ def _row(ws, label: str, values: list[float], fmt: str = "#,##0") -> None:
         c.number_format = fmt
 
 
-def build_workbook(out: Path) -> Path:
-    d = build_data()
+def build_workbook(out: Path, lakh: bool = False) -> Path:
+    """lakh=True: P&L and cash in INR lakh. The units are written the way real packs do it: the P&L units row says
+    "INR (₹ in lakhs)", the cash sheet says it only in its title. Unit economics has no S&M total, so CAC needs the
+    lakh marketing rows converted (from_lakh)."""
+    d = build_data_lakh() if lakh else build_data()
+    money_fmt = "#,##0.00" if lakh else "#,##0"
     wb = Workbook()
 
     ws = wb.active
     ws.title = "P&L"
-    _title(ws, "Monthly P&L", "INR", COMPANY)
+    _title(ws, "Monthly P&L", "INR (₹ in lakhs)" if lakh else "INR", COMPANY)
     _header(ws, ["Line Item", *MONTHS])
     for name, rows in PL_SECTIONS:
         _section(ws, name)
         for label, key in rows:
-            _row(ws, label, d[key])
+            _row(ws, label, d[key], money_fmt)
     ws.column_dimensions["A"].width = 34
 
     ws = wb.create_sheet("Unit Economics")
@@ -155,7 +179,8 @@ def build_workbook(out: Path) -> Path:
     _row(ws, "ARPU (monthly)", d["arpu"], "#,##0.00")
     _row(ws, "Gross Margin %", d["gm"], "0.00%")
     _row(ws, "Monthly Churn %", d["churn"], "0.00%")
-    _row(ws, "Total S&M Spend", d["sm_spend"])
+    if not lakh:
+        _row(ws, "Total S&M Spend", d["sm_spend"])
     ws.column_dimensions["A"].width = 26
 
     ws = wb.create_sheet("Pricing")
@@ -171,12 +196,12 @@ def build_workbook(out: Path) -> Path:
     ws.column_dimensions["A"].width = 48
 
     ws = wb.create_sheet("Cash")
-    _title(ws, "Cash Position", "INR")
+    _title(ws, "Cash Position (Rs. in Lakhs)" if lakh else "Cash Position", "INR")
     _header(ws, ["Line Item", *MONTHS])
     _section(ws, "Bank")
     for label, key in [("Opening Cash Balance", "opening_cash"), ("Cash In", "cash_in"), ("Cash Out", "cash_out"),
                        ("Closing Cash Balance", "closing_cash")]:
-        _row(ws, label, d[key])
+        _row(ws, label, d[key], money_fmt)
     ws.column_dimensions["A"].width = 26
 
     ws = wb.create_sheet("Headcount")
@@ -249,8 +274,9 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", default=str(ROOT / "sample_startup_mis.xlsx"))
     ap.add_argument("--pdf", help="also write a board-pack PDF of the same data to this path")
+    ap.add_argument("--lakh", action="store_true", help="P&L and cash in INR lakh (write it under outputs/, not over the sample)")
     args = ap.parse_args()
-    out = build_workbook(Path(args.out))
+    out = build_workbook(Path(args.out), lakh=args.lakh)
     print(f"wrote {out}")
     if args.pdf:
         print(f"wrote {build_board_pack_pdf(Path(args.pdf))}")

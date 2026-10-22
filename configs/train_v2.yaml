@@ -1,0 +1,30 @@
+# v2 QLoRA fine-tune: python train_qwen3.py --config configs/train_v2.yaml
+# Data: python generate_raft_data.py --n 3000 --output dataset_v2.jsonl  (11 tasks, contract v2)
+# Separate dataset / checkpoints / adapter so the v1 adapter and its data stay untouched.
+seed: 3407
+model_name: unsloth/Qwen3-4B-unsloth-bnb-4bit
+max_seq_length: 6144          # examples are ~2.5-5.5k tokens (Qwen splits numbers into digits)
+load_in_4bit: true
+
+dataset: dataset_v2.jsonl
+output_dir: outputs/v2              # checkpoints + logs (git-ignored)
+adapter_dir: qwen3_4b_finance_lora_v2  # final LoRA adapters (git-ignored)
+
+lora:
+  r: 32
+  alpha: 32
+  dropout: 0.0
+  target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+
+train:
+  epochs: 1                         # v1 loss was flat by ~0.5 epoch; diversity matters more than repeats
+  per_device_batch_size: 1
+  gradient_accumulation_steps: 8    # effective batch 8
+  learning_rate: 2.0e-4
+  warmup_steps: 10
+  lr_scheduler: linear
+  weight_decay: 0.01
+  optim: adamw_8bit
+  logging_steps: 5
+  eval: false                       # the mid-run eval spilled VRAM on 8 GB (v1 run); score with eval_model.py instead
+  save_steps: 50

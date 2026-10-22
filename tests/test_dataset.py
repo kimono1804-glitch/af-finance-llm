@@ -76,3 +76,44 @@ def test_period_gap_examples():
         assert len(ex["messages"]) == 3 and "tool_calls" not in ex["messages"][2]
         assert asked in ex["messages"][2]["content"]
         assert not validate_example(ex), validate_example(ex)
+
+
+def _question(ex: dict) -> str:
+    return ex["messages"][1]["content"].rsplit("Question:", 1)[-1].strip()
+
+
+def test_question_variation_keeps_period_and_differs_from_v1():
+    from generate_raft_data import TASKS
+
+    cfg = dict(_cfg(), scaled_units=0.0)  # wording only; lakh/crore scaling is tested in test_units_contract
+    legacy = dict(cfg, compat_v1=True)
+    changed = 0
+    for i, task in enumerate(sorted(TASKS)):
+        for j in range(15):
+            idx = 500 + i * 100 + j
+            ex, old = build_example(idx, cfg, task, False, "train"), build_example(idx, legacy, task, False, "train")
+            q = _question(ex)
+            assert not validate_example(ex)
+            assert "lTV" not in q and not q[:1].isdigit()
+            changed += q != _question(old)
+            # the variation has its own rng: the tables and the answer stay the same
+            assert ex["meta"]["truth"] == old["meta"]["truth"]
+    assert changed > 30
+
+
+def test_compat_v1_has_no_period_gaps():
+    cfg = dict(_cfg(), compat_v1=True)
+    exs = [build_example(900 + i, cfg, "net_revenue", True, "train") for i in range(30)]
+    assert all(e["meta"].get("missing_kind") != "period" for e in exs)
+
+
+def test_quarterly_distractor_note():
+    cfg = _cfg()
+    found = 0
+    for i in range(60):
+        ex = build_example(2000 + i, cfg, "ltv_cac", False, "train")
+        ctx = ex["messages"][1]["content"]
+        if "Quarterly Summary" in ctx.split("Question:")[0]:
+            assert "has quarter totals" in ex["messages"][2]["content"]
+            found += 1
+    assert found > 0

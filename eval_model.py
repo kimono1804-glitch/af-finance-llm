@@ -48,12 +48,14 @@ ROOT = Path(__file__).resolve().parent
 # Building the cases
 # ---------------------------------------------------------------------------
 
-def synthetic_cases(cfg: dict[str, Any]) -> list[tuple[Gold, str, list[dict]]]:
+def synthetic_cases(cfg: dict[str, Any], v1_compat: bool = False) -> list[tuple[Gold, str, list[dict]]]:
     """(gold, user_message, gold_messages) for fresh examples from a seed the training set never used."""
     from generate_raft_data import TASKS, build_example
 
     data_cfg = yaml.safe_load((ROOT / "configs" / "data.yaml").read_text(encoding="utf-8"))
     data_cfg["seed"] = cfg["synthetic"]["seed"]
+    if v1_compat:
+        data_cfg["compat_v1"] = True
     every = cfg["synthetic"]["missing_every"]
     out = []
     for t_i, task in enumerate(cfg.get("tasks") or list(TASKS)):
@@ -72,13 +74,15 @@ def synthetic_cases(cfg: dict[str, Any]) -> list[tuple[Gold, str, list[dict]]]:
     return out
 
 
-def realworld_cases(top_k: int | None, period_guard: bool = True) -> tuple[list[tuple[Gold, str, Any]], list[dict[str, Any]]]:
+def realworld_cases(top_k: int | None, period_guard: bool = True,
+                    v1_compat: bool = False) -> tuple[list[tuple[Gold, str, Any]], list[dict[str, Any]]]:
     """Retrieve context for every real-world question (CPU) and record retrieval recall.
 
     With period_guard, a question about a period that is not in the MIS gets the deterministic
     run_assistant.period_guard answer (third tuple element) instead of a model call, as in the real assistant.
     """
-    from eval_cases import build_cases
+    from eval_cases import V1_CASE_IDS, build_cases, build_lakh_cases
+    from make_sample_mis import build_workbook
     from ingest_financials import ingest_paths
     from rag_pipeline import HybridRetriever
     from run_assistant import period_guard as guard_fn
@@ -86,11 +90,31 @@ def realworld_cases(top_k: int | None, period_guard: bool = True) -> tuple[list[
     from common.periods import resolve_relative_periods
 
     retriever = HybridRetriever()
-    chunks = ingest_paths([ROOT / "sample_startup_mis.xlsx"], retriever.cfg["max_rows_per_chunk"])
-    retriever.index(chunks)
-    periods = {p for c in chunks for p in c.metadata.periods}
+    groups = [(ROOT / "sample_startup_mis.xlsx", build_cases())]
+    if not v1_compat:  # lakh-format copy of the same company (added 2026-10-22), built fresh each run
+        lakh_path = ROOT / "outputs" / "sample_startup_mis_lakh.xlsx"
+        lakh_path.parent.mkdir(exist_ok=True)
+        groups.append((build_workbook(lakh_path, lakh=True), build_lakh_cases()))
     out, recall_rows = [], []
-    for case in build_cases():
+    for path, group_cases in groups:
+        chunks = ingest_paths([path], retriever.cfg["max_rows_per_chunk"])
+        retriever.index(chunks)
+        periods = {p for c in chunks for p in c.metadata.periods}
+        out_g, recall_g = _realworld_group(retriever, chunks, periods, group_cases, top_k, period_guard, v1_compat,
+                                           V1_CASE_IDS, guard_fn, resolve_relative_periods)
+        out += out_g
+        recall_rows += recall_g
+    del retriever
+    gc.collect()
+    return out, recall_rows
+
+
+def _realworld_group(retriever, chunks, periods, cases, top_k, period_guard, v1_compat, v1_ids, guard_fn,
+                     resolve_relative_periods) -> tuple[list[tuple[Gold, str, Any]], list[dict[str, Any]]]:
+    out, recall_rows = [], []
+    for case in cases:
+        if v1_compat and case.case_id not in v1_ids:
+            continue
         question, _ = resolve_relative_periods(case.question, periods)  # same preprocessing as run_assistant
         hits = retriever.search(question, top_k)
         sections = {h.chunk.metadata.section for h in hits}
@@ -104,8 +128,6 @@ def realworld_cases(top_k: int | None, period_guard: bool = True) -> tuple[list[
                     missing_keywords=case.missing_keywords, edge_cases=case.edge_cases)
         guarded = guard_fn(question, periods, {c.metadata.source for c in chunks}) if period_guard else None
         out.append((gold, user, guarded))
-    del retriever
-    gc.collect()
     return out, recall_rows
 
 
@@ -235,7 +257,18 @@ def main() -> None:
     ap.add_argument("--report", help="report path (default reports/eval_<date>[_tag].md)")
     ap.add_argument("--no-period-guard", action="store_true",
                     help="real-world suite: send questions about absent periods to the model (measures the raw model)")
+    ap.add_argument("--adapter", help="adapter dir for the fine-tuned model (default: configs/train.yaml adapter_dir)")
+    ap.add_argument("--contract", choices=["v1", "v2"], default=None,
+                    help="prompt contract for every model; default = the configured adapter's (base gets the same)")
+    ap.add_argument("--v1-compat", action="store_true",
+                    help="rebuild the cases exactly as the v1 run started them (2026-10-21, before 22:55): no "
+                         "row-decimal alignment, no period-gap missing cases, no period guard")
     args = ap.parse_args()
+    if args.v1_compat:
+        import common.tables
+
+        common.tables.ALIGN_ROW_DECIMALS = False
+        args.no_period_guard = True
     from common.winperf import boost_process
 
     boost_process()  # keep the GPU-feeding thread off Windows efficiency cores
@@ -244,6 +277,8 @@ def main() -> None:
     if args.n_per_task:
         cfg["synthetic"]["n_per_task"] = args.n_per_task
     train_cfg = yaml.safe_load((ROOT / "configs" / "train.yaml").read_text(encoding="utf-8"))
+    adapter = Path(args.adapter) if args.adapter else ROOT / train_cfg["adapter_dir"]
+    adapter_arg = adapter.name
     stamp = dt.datetime.now().strftime("%Y-%m-%d")
     tag = f"_{args.tag}" if args.tag else ""
     report = Path(args.report) if args.report else ROOT / "reports" / f"eval_{stamp}{tag}.md"
@@ -251,14 +286,15 @@ def main() -> None:
     cases: list[tuple[Gold, str, Any]] = []
     recall_rows: list[dict[str, Any]] = []
     if args.suite in ("synthetic", "all"):
-        cases += synthetic_cases(cfg)
+        cases += synthetic_cases(cfg, v1_compat=args.v1_compat)
     if args.suite in ("realworld", "all") and not args.gold:
-        rw, recall_rows = realworld_cases(cfg.get("top_k"), period_guard=not args.no_period_guard)
+        rw, recall_rows = realworld_cases(cfg.get("top_k"), period_guard=not args.no_period_guard,
+                                         v1_compat=args.v1_compat)
         cases += rw
     print(f"{len(cases)} cases ({sum(1 for c in cases if c[0].missing)} missing-data)")
 
     header = [f"- Date: {dt.datetime.now():%Y-%m-%d %H:%M}",
-              f"- Base model: `{train_cfg['model_name']}`; adapter: `{train_cfg['adapter_dir']}`",
+              f"- Base model: `{train_cfg['model_name']}`; adapter: `{adapter_arg}`",
               f"- Synthetic: seed {cfg['synthetic']['seed']}, {cfg['synthetic']['n_per_task']} per task family "
               f"(every {cfg['synthetic']['missing_every']}th is a missing-data case)",
               f"- Decoding: temperature {cfg['temperature']}, max_new_tokens {cfg['max_new_tokens']}",
@@ -279,16 +315,19 @@ def main() -> None:
 
     runs_dir = ROOT / "outputs" / "eval_runs"
     runs_dir.mkdir(parents=True, exist_ok=True)
+    from common.prompts import adapter_contract
+
+    contract = args.contract or ("v1" if args.v1_compat else adapter_contract(adapter))
+    header.append(f"- Prompt contract: {contract}")
     if args.backend == "server":
         from run_assistant import ServerLLM
 
         name = f"server: {args.server_model}"
-        results = {name: run_model(name, lambda: ServerLLM(args.server_url, args.server_model), cases,
+        results = {name: run_model(name, lambda: ServerLLM(args.server_url, args.server_model, contract=contract), cases,
                                    runs_dir / f"server_{args.server_model.replace(':', '_')}{tag}.jsonl",
                                    cfg["max_new_tokens"], cfg["temperature"], cfg.get("max_time_per_turn"))}
         write_report(report, results, recall_rows, header + [f"- Backend: {args.server_url}"])
         return
-    adapter = ROOT / train_cfg["adapter_dir"]
     plan = {"ft": [("fine-tuned", adapter)], "base": [("base", None)],
             "both": [("fine-tuned", adapter), ("base", None)]}[args.models]
     if any(a is not None for _, a in plan) and not (adapter / "adapter_config.json").exists():
@@ -301,7 +340,7 @@ def main() -> None:
             import torch
 
             torch.manual_seed(0)
-            return FinanceLLM(ad, train_cfg["model_name"])
+            return FinanceLLM(ad, train_cfg["model_name"], contract=contract)
 
         results[name] = run_model(name, make_llm, cases, runs_dir / f"{name.replace('-', '_')}{tag}.jsonl",
                                   cfg["max_new_tokens"], cfg["temperature"], cfg.get("max_time_per_turn"))

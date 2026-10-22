@@ -1,0 +1,10 @@
+# Evaluation of the v2 adapter (eval_model.py --config configs/eval_v2.yaml --adapter qwen3_4b_finance_lora_v2 --tag v2)
+synthetic:
+  seed: 9001          # never used for training data (training uses 3407)
+  n_per_task: 10      # x 11 task families = 110 cases (+ 31 real-world); ~1 min/case fine-tuned, ~2 min base
+  missing_every: 7    # every 7th case per task is a missing-data case
+tasks: null           # null = all 11 task families (v2 adapter is trained on all of them)
+top_k: null           # null = configs/rag.yaml top_k
+temperature: 0.0      # greedy decoding for reproducible scores
+max_new_tokens: 1536
+max_time_per_turn: 240   # seconds; a generate() call that runs longer is cut off (guards against stalls)

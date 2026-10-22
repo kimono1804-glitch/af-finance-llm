@@ -12,6 +12,10 @@ from collections.abc import Sequence
 
 from common.schemas import ChunkMetadata
 
+# Row-consistent decimals (added 2026-10-21 22:55). eval_model.py --v1-compat turns this off to rebuild the
+# exact contexts the v1 evaluation started with.
+ALIGN_ROW_DECIMALS = True
+
 
 def format_cell(value: object, is_percent: bool = False) -> str:
     """Render a cell the way a finance team would read it."""
@@ -77,7 +81,8 @@ def render_chunk(title: str, meta: ChunkMetadata, headers: Sequence[str], rows: 
         meta_parts.append(f"Units: {meta.units}")
     if meta.page is not None:
         meta_parts.append(f"Page: {meta.page}")
-    return f"#### {title}\n" + " | ".join(meta_parts) + "\n" + markdown_table(headers, [align_row_decimals(r) for r in rows])
+    return f"#### {title}\n" + " | ".join(meta_parts) + "\n" + markdown_table(
+        headers, [align_row_decimals(r) for r in rows] if ALIGN_ROW_DECIMALS else rows)
 
 
 def render_text_chunk(title: str, meta: ChunkMetadata, text: str) -> str:

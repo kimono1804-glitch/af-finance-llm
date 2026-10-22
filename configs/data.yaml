@@ -4,6 +4,7 @@ n_examples: 1000
 test_fraction: 0.10        # held out for evaluation (meta.split == "test")
 missing_fraction: 0.10     # "state what's missing" examples (no tool call)
 missing_period_share: 0.4  # of those: question asks for a month outside every table (rest: an input cell/row is absent)
+scaled_units: 0.2         # share of companies whose statements are in lakh / crore (INR) or thousands (USD)
 output: dataset.jsonl
 
 # Relative frequency of each task family
@@ -18,6 +19,7 @@ task_weights:
   burn_multiple: 1.0
   magic_number: 1.0
   gross_margin: 0.75
+  multi_period: 1.25        # MoM growth, n-month totals / averages, YTD (added 2026-10-22)
 
 # Irrelevant tables mixed into each context
 distractors:

@@ -44,6 +44,10 @@ python generate_raft_data.py --validate-only
 # 2. QLoRA fine-tune (r=32, alpha=32, all linear layers, responses only, packing=False)
 python train_qwen3.py --max-steps 5     # smoke test
 python train_qwen3.py                   # -> qwen3_4b_finance_lora/ (+ loss_curve.png)
+# v2 (11 tasks, lakh/crore, multi-period; separate data / checkpoints / adapter):
+python generate_raft_data.py --n 3000 --output dataset_v2.jsonl
+python train_qwen3.py --config configs/train_v2.yaml   # -> qwen3_4b_finance_lora_v2/
+python eval_model.py --config configs/eval_v2.yaml --adapter qwen3_4b_finance_lora_v2 --tag v2
 
 # 3. Ingestion + retrieval
 python make_sample_mis.py               # -> sample_startup_mis.xlsx (synthetic company)
@@ -65,6 +69,7 @@ python eval_model.py --retrieval-only                    # retrieval recall on r
 python eval_model.py                                     # fine-tuned vs base, synthetic + real-world (hours)
 python eval_model.py --models ft --n-per-task 5          # quick check
 python eval_model.py --suite realworld --no-period-guard # raw model on absent-period questions (no guard)
+python eval_model.py --tag v1 --v1-compat               # resume / repeat the v1 evaluation on identical cases
 
 # 6. Export for serving (exports/, git-ignored)
 python export.py --gguf q4_k_m                           # GGUF for llama.cpp / Ollama (+ Modelfile, SERVING.md)
@@ -72,7 +77,7 @@ python export.py --gguf q4_k_m --merged                  # also merged 16-bit fo
 # then serve it and point the assistant (or the evaluator) at the server:
 llama-server -m exports/gguf/<file>.gguf --jinja -ngl 99 -c 8192 --port 8080 --alias af-finance-qwen3-4b
 python run_assistant.py --backend server --server-url http://localhost:8080/v1
-python eval_model.py --backend server --tag gguf         # measure quantization loss
+python eval_model.py --backend server --tag gguf         # measure quantization loss (add --v1-compat for the v1 adapter)
 ```
 
 Slow tests (Docling PDF ingestion): `pytest -m slow`.
@@ -87,20 +92,24 @@ Slow tests (Docling PDF ingestion): `pytest -m slow`.
 `generate_raft_data.py` simulates 12-36 months of a startup's P&L, unit economics and pricing plan with a fixed seed. Each example:
 
 - `<financial_context>`: the relevant tables plus 3-6 distractor tables (headcount, cash, cohorts, benchmarks, prior-year P&L, other P&L sections), 3-12 month columns, the same Markdown chunk format the ingester produces.
-- A question about one period. Tasks: net revenue, gross margin, CM1/CM2/CM3, EBITDA (from EBIT or net income, adjusted EBITDA, EBITDA margin), break-even (simple, cost components, step-fixed hiring, base/bull/bear), LTV:CAC, CAC payback, runway, burn multiple (ARR bridge), magic number (fiscal quarters).
+- A question about one period. Tasks: net revenue, gross margin, CM1/CM2/CM3, EBITDA (from EBIT or net income, adjusted EBITDA, EBITDA margin), break-even (simple, cost components, step-fixed hiring, base/bull/bear), LTV:CAC, CAC payback, runway, burn multiple (ARR bridge), magic number (fiscal quarters), multi-period questions (month-on-month growth, totals and averages over the last 3-6 months, year-to-date from April).
+- Founder-style phrasing: extra question templates, casual casing, prefixes ("Quick one:") and suffixes.
+- Units: about 20% of companies report their statements in INR lakh, INR crore or USD thousands. Amounts are passed to the calculator as shown and results stay in those units; when scaled amounts meet counts or plain-unit values (S&M in lakh / new customers for CAC), the model converts them first with `from_lakh` / `from_crore` / `from_thousands` / `from_millions`.
 - Edge cases: negative gross margin, seasonal churn spike, zero churn, capitalized R&D, deferred revenue, step-fixed costs, price below variable cost, cash-positive months (runway not applicable), shrinking ARR (burn multiple undefined), and missing-data examples (only where the value cannot be derived from other rows).
 - Assistant turn 1: `<think>` with each input's table/row/column, the tables ignored, the formulas; then a `finance_calculator` call.
 - Tool turn: results from `common/tools.py`.
 - Assistant turn 2: short `<think>` check, then a Markdown CFO report that copies the tool's display values.
 
-Validation re-runs every tool call, checks it against ground truth computed separately from the simulated data, checks that every input number appears in the context, and checks that every result appears in the report.
+Validation re-runs every tool call, checks it against ground truth computed separately from the simulated data, checks that every input number appears in the context, checks that every input quoted in `<think>` is the exact cell of that row, and checks that every result appears in the report.
+
+**Prompt contracts.** The tool description lists the calculator's formulas, so adding formulas changes what a model sees. Each trained adapter stores its contract in `contract.json` (adapters without one are `v1`); `run_assistant.py` and `eval_model.py` show each model the tool list it was trained with (`--contract` overrides).
 
 ## Layout
 
 ```
 common/            formulas.py (all finance math), tools.py (calculator), prompts.py (system prompt + tool schema),
                    tables.py (chunk rendering), schemas.py, audit.py (faithfulness check), scoring.py (eval metrics),
-                   periods.py ("last month" -> latest period in the data)
+                   periods.py ("last month" -> latest period in the data), units.py (lakh / crore / '000 detection)
 configs/           data.yaml, train.yaml, rag.yaml
 generate_raft_data.py  train_qwen3.py  ingest_financials.py  rag_pipeline.py  make_sample_mis.py  run_assistant.py
 eval_model.py  eval_cases.py  export.py
@@ -113,7 +122,9 @@ tests/
 
 `eval_model.py` scores two suites:
 - **Synthetic** (oracle context): fresh examples from a seed never used in training, 20 per task family by default.
-- **Real-world**: 21 founder-style questions about the sample MIS (`eval_cases.py`), answered through the full retrieval pipeline. Expected values are computed in Python from the workbook's data.
+- **Real-world**: 31 founder-style questions: 26 on the sample MIS (rw-22..26 are multi-period) and 5 on a lakh-format copy of it (`make_sample_mis.py --lakh`, built into `outputs/` on each run; CAC needs the lakh marketing rows converted). `--v1-compat` uses the original 21 about the sample MIS (`eval_cases.py`), answered through the full retrieval pipeline. Expected values are computed in Python from the workbook's data.
+
+**Units in real files:** the ingester reads scaled units from a `Units:` row, a title row or header cell ("P&L (₹ in lakhs)"), a PDF caption, or a units note such as "All figures in INR lakh unless stated", and writes them into every chunk as `Units: INR lakh`.
 
 **Period guard:** if a question names a month or quarter that is not in the uploaded data (for example Mar-25 when the MIS covers Apr-25 to Mar-26), `run_assistant.py` answers "data not available" without calling the model, so another period's numbers are never reported under the asked period's name. The real-world eval uses the guard by default; `--no-period-guard` measures the raw model.
 

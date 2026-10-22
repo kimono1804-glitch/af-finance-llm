@@ -205,3 +205,52 @@ def percent_of(part: float, whole: float) -> float:
     if whole == 0:
         raise FinanceMathError("whole must not be 0")
     return part / whole
+
+
+
+def growth_pct(current: float, prior: float) -> float:
+    """Period-over-period growth as a fraction: (current - prior) / |prior|."""
+    if prior == 0:
+        raise FinanceMathError("prior period value is 0, so growth is undefined")
+    return (current - prior) / abs(prior)
+
+
+def average(values: Iterable[float]) -> float:
+    """Mean of a list of monthly values."""
+    vals = list(values)
+    if not vals:
+        raise FinanceMathError("no values to average")
+    return float(sum(vals)) / len(vals)
+
+# ---------------------------------------------------------------------------
+# Unit conversion (Indian MIS often reports in lakh / crore; US packs in thousands / millions)
+# ---------------------------------------------------------------------------
+
+UNIT_FACTORS: dict[str, int] = {"lakh": 100_000, "crore": 10_000_000, "thousand": 1_000, "million": 1_000_000}
+
+
+def to_base_units(amount: float, unit: str) -> float:
+    """Amount written in `unit` (lakh / crore / thousand / million) -> plain currency units."""
+    if unit not in UNIT_FACTORS:
+        raise FinanceMathError(f"unknown unit {unit!r}")
+    return amount * UNIT_FACTORS[unit]
+
+
+def from_lakh(amount: float) -> float:
+    """1 lakh = 100,000."""
+    return to_base_units(amount, "lakh")
+
+
+def from_crore(amount: float) -> float:
+    """1 crore = 10,000,000 (100 lakh)."""
+    return to_base_units(amount, "crore")
+
+
+def from_thousands(amount: float) -> float:
+    """Amounts shown in '000."""
+    return to_base_units(amount, "thousand")
+
+
+def from_millions(amount: float) -> float:
+    """Amounts shown in millions."""
+    return to_base_units(amount, "million")

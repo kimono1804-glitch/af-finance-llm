@@ -55,12 +55,25 @@ REGISTRY: dict[str, FormulaSpec] = {
     "difference": FormulaSpec(F.difference, ("a", "b"), "currency"),
     "ratio": FormulaSpec(F.ratio, ("numerator", "denominator"), "ratio"),
     "percent_of": FormulaSpec(F.percent_of, ("part", "whole"), "percent"),
+    # contract v2 (2026-10-22): unit conversion
+    "from_lakh": FormulaSpec(F.from_lakh, ("amount",), "currency"),
+    "from_crore": FormulaSpec(F.from_crore, ("amount",), "currency"),
+    "from_thousands": FormulaSpec(F.from_thousands, ("amount",), "currency"),
+    "from_millions": FormulaSpec(F.from_millions, ("amount",), "currency"),
+    # multi-period
+    "growth_pct": FormulaSpec(F.growth_pct, ("current", "prior"), "percent"),
+    "average": FormulaSpec(F.average, ("values",), "currency", ("values",)),
 }
 
+# Formulas the v1 adapter was trained with (its tool description lists only these). The calculator still
+# accepts every formula; this only controls what the prompt shows a v1 model.
+V1_FORMULAS: tuple[str, ...] = tuple(REGISTRY)[:tuple(REGISTRY).index("from_lakh")]
 
-def formula_signatures() -> str:
+
+def formula_signatures(names: tuple[str, ...] | None = None) -> str:
     """One line per formula, used in the tool description shown to the model."""
-    return "\n".join(f"- {name}({', '.join(spec.params)}) -> {spec.kind}" for name, spec in REGISTRY.items())
+    return "\n".join(f"- {name}({', '.join(spec.params)}) -> {spec.kind}" for name, spec in REGISTRY.items()
+                     if names is None or name in names)
 
 
 # ---------------------------------------------------------------------------

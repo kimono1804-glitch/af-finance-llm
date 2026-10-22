@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -25,7 +26,10 @@ SERVING = """# Serving the exported model
 
 The assistant needs a server that speaks the OpenAI chat API with tool calling. Then run:
 
-    python run_assistant.py --backend server --server-url http://localhost:8080/v1 --server-model {name}
+    python run_assistant.py --backend server --server-url http://localhost:8080/v1 --server-model {name} --contract {contract}
+
+This model was trained on prompt contract **{contract}** (`exports/contract.json`): the client must send that
+contract's tool list, so always pass `--contract {contract}` to run_assistant.py / eval_model.py in server mode.
 
 ## llama.cpp (Windows/Linux/macOS, GPU or CPU)
 
@@ -96,7 +100,12 @@ def main() -> None:
         (target / "Modelfile").write_text(MODELFILE.format(gguf=gguf_name), encoding="utf-8")
         print(f"GGUF -> {target} ({', '.join(f.name for f in files)})")
 
-    (out / "SERVING.md").write_text(SERVING.format(name=args.name, gguf=gguf_name), encoding="utf-8")
+    from common.prompts import adapter_contract, prompt_version
+
+    contract = adapter_contract(adapter)
+    (out / "contract.json").write_text(json.dumps({"contract": contract, "prompt_version": prompt_version(contract),
+                                                   "adapter": adapter.name}), encoding="utf-8")
+    (out / "SERVING.md").write_text(SERVING.format(name=args.name, gguf=gguf_name, contract=contract), encoding="utf-8")
     print(f"serve instructions -> {out / 'SERVING.md'}")
 
 
