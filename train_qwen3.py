@@ -71,11 +71,17 @@ def main() -> None:
     ap.add_argument("--resume", action="store_true", help="resume from the latest checkpoint in output_dir")
     ap.add_argument("--no-eval", action="store_true",
                     help="skip mid-training eval (on 8 GB cards eval can spill VRAM into shared memory and stall training)")
+    ap.add_argument("--overwrite", action="store_true",
+                    help="allow replacing an existing adapter in adapter_dir (refused by default)")
     args = ap.parse_args()
+    cfg = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
+    # Fail before hours of training, not at save time: never silently replace an evaluated adapter.
+    if (ROOT / cfg["adapter_dir"] / "adapter_config.json").exists() and not args.overwrite:
+        sys.exit(f"{cfg['adapter_dir']}/ already holds an adapter. Set a new adapter_dir in {args.config} "
+                 f"or pass --overwrite.")
     from common.winperf import boost_process
 
     boost_process()  # keep the GPU-feeding thread off Windows efficiency cores
-    cfg = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
     tcfg, lcfg = cfg["train"], cfg["lora"]
 
     # Unsloth must be imported before transformers / trl so its patches apply.

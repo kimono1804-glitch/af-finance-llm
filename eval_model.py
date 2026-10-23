@@ -30,6 +30,7 @@ import argparse
 import datetime as dt
 import gc
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -145,6 +146,8 @@ def run_model(name: str, make_llm: Any, cases: list[tuple[Gold, str, Any]],
     if out_path.exists():
         for line in out_path.read_text(encoding="utf-8").splitlines():
             r = json.loads(line)
+            if str(r.get("trace", {}).get("report", "")).startswith("(generation error"):
+                continue  # transport/server failure, not a model answer: retry it
             done[r["case_id"]] = r
     todo = [c for c in cases if c[0].case_id not in done]
     print(f"[{name}] {len(done)} cached, {len(todo)} to run -> {out_path}")
@@ -250,10 +253,14 @@ def main() -> None:
     ap.add_argument("--n-per-task", type=int, help="override synthetic n_per_task")
     ap.add_argument("--gold", action="store_true", help="score the gold answers (scorer self-test, no LLM)")
     ap.add_argument("--retrieval-only", action="store_true", help="real-world retrieval recall only, no LLM")
-    ap.add_argument("--backend", choices=["local", "server"], default="local",
-                    help="server = evaluate an exported model behind an OpenAI-compatible server (e.g. GGUF in llama-server)")
+    ap.add_argument("--backend", choices=["local", "server", "claude"], default="local",
+                    help="server = a model behind an OpenAI-compatible server (e.g. GGUF in llama-server); "
+                         "claude = a Claude model through the Anthropic API (comparison baseline)")
     ap.add_argument("--server-url", default="http://localhost:8080/v1")
     ap.add_argument("--server-model", default="af-finance-qwen3-4b")
+    ap.add_argument("--server-api-key-env", help="env var holding a bearer key for the server (hosted OpenAI-compatible APIs)")
+    ap.add_argument("--claude-model", default="claude-opus-5-5")
+    ap.add_argument("--claude-effort", default="high", help="output_config.effort for --backend claude")
     ap.add_argument("--tag", default="", help="suffix for run files and report name")
     ap.add_argument("--report", help="report path (default reports/eval_<date>[_tag].md)")
     ap.add_argument("--no-period-guard", action="store_true",
@@ -324,21 +331,25 @@ def main() -> None:
     header.append(f"- Prompt contract: {contract}")
     if args.rescore:  # same cases, same run files; only the scoring is redone
         names = ([f"server: {args.server_model}"] if args.backend == "server" else
+                 [f"claude: {args.claude_model}"] if args.backend == "claude" else
                  {"ft": ["fine-tuned"], "base": ["base"], "both": ["fine-tuned", "base"]}[args.models])
         golds = {g.case_id: g for g, *_ in cases}
         results = {}
         for name in names:
             fname = (f"server_{args.server_model.replace(':', '_')}{tag}.jsonl" if args.backend == "server"
+                     else f"claude_{args.claude_model}{tag}.jsonl" if args.backend == "claude"
                      else f"{name.replace('-', '_')}{tag}.jsonl")
             path = runs_dir / fname
             if not path.exists():
                 print(f"[{name}] no run file {path}")
                 continue
-            rows = []
+            latest: dict[str, dict[str, Any]] = {}  # last row per case wins (a retried error row is superseded)
             for line in path.read_text(encoding="utf-8").splitlines():
                 old = json.loads(line)
-                if old["case_id"] not in golds:
-                    continue
+                if old["case_id"] in golds and not str(old["trace"].get("report", "")).startswith("(generation error"):
+                    latest[old["case_id"]] = old
+            rows = []
+            for old in latest.values():
                 new = score(old["trace"], golds[old["case_id"]])
                 new["latency_s"], new["trace"] = old.get("latency_s"), old["trace"]
                 if new["end_to_end"] != old["end_to_end"]:
@@ -348,11 +359,30 @@ def main() -> None:
             print(f"[{name}] re-scored {len(rows)} cached cases")
         write_report(report, results, recall_rows, header + ["- Mode: re-scored cached runs (no new generation)"])
         return
+    if args.backend == "claude":
+        from common.claude_llm import ClaudeLLM
+
+        name = f"claude: {args.claude_model}"
+        holder: dict[str, Any] = {}
+
+        def make_claude() -> Any:
+            holder["llm"] = ClaudeLLM(args.claude_model, contract=contract, effort=args.claude_effort)
+            return holder["llm"]
+
+        results = {name: run_model(name, make_claude, cases, runs_dir / f"claude_{args.claude_model}{tag}.jsonl",
+                                   cfg["max_new_tokens"], cfg["temperature"])}
+        if "llm" in holder:
+            print(f"[{name}] API usage this run: {holder['llm'].usage}")
+        write_report(report, results, recall_rows,
+                     header + [f"- Backend: Anthropic API, {args.claude_model}, effort {args.claude_effort}"])
+        return
     if args.backend == "server":
         from run_assistant import ServerLLM
 
         name = f"server: {args.server_model}"
-        results = {name: run_model(name, lambda: ServerLLM(args.server_url, args.server_model, contract=contract), cases,
+        api_key = os.environ.get(args.server_api_key_env, "") if args.server_api_key_env else ""
+        results = {name: run_model(name, lambda: ServerLLM(args.server_url, args.server_model, contract=contract,
+                                                           api_key=api_key or None), cases,
                                    runs_dir / f"server_{args.server_model.replace(':', '_')}{tag}.jsonl",
                                    cfg["max_new_tokens"], cfg["temperature"], cfg.get("max_time_per_turn"))}
         write_report(report, results, recall_rows, header + [f"- Backend: {args.server_url}"])

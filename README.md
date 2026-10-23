@@ -42,9 +42,12 @@ python generate_raft_data.py            # -> dataset.jsonl
 python generate_raft_data.py --validate-only
 
 # 2. QLoRA fine-tune (r=32, alpha=32, all linear layers, responses only, packing=False)
+# configs/train.yaml adapter_dir is the default adapter for the assistant, eval and export
+# (now qwen3_4b_finance_lora_v2). Training refuses to replace an existing adapter: set a new
+# adapter_dir in the config, or pass --overwrite.
 python train_qwen3.py --max-steps 5     # smoke test
-python train_qwen3.py                   # -> qwen3_4b_finance_lora/ (+ loss_curve.png)
-# v2 (11 tasks, lakh/crore, multi-period; separate data / checkpoints / adapter):
+python train_qwen3.py                   # -> adapter_dir (+ loss_curve.png)
+# v2 (11 tasks, lakh/crore, multi-period; separate data / checkpoints / adapter; report reports/eval_2026-10-23_v2.md):
 python generate_raft_data.py --n 3000 --output dataset_v2.jsonl
 python train_qwen3.py --config configs/train_v2.yaml   # -> qwen3_4b_finance_lora_v2/
 python eval_model.py --config configs/eval_v2.yaml --adapter qwen3_4b_finance_lora_v2 --tag v2
@@ -72,12 +75,14 @@ python eval_model.py --suite realworld --no-period-guard # raw model on absent-p
 python eval_model.py --tag v1 --v1-compat               # resume / repeat the v1 evaluation on identical cases
 
 # 6. Export for serving (exports/, git-ignored)
-python export.py --gguf q4_k_m                           # GGUF for llama.cpp / Ollama (+ Modelfile, SERVING.md)
-python export.py --gguf q4_k_m --merged                  # also merged 16-bit for vLLM
-# then serve it and point the assistant (or the evaluator) at the server:
-llama-server -m exports/gguf/<file>.gguf --jinja -ngl 99 -c 8192 --port 8080 --alias af-finance-qwen3-4b
-python run_assistant.py --backend server --server-url http://localhost:8080/v1
-python eval_model.py --backend server --tag gguf         # measure quantization loss (add --v1-compat for the v1 adapter)
+# Merges the LoRA into the dequantized 4-bit base it was trained on (Unsloth's own merge uses the original
+# bf16 weights and lost 14 points), then llama.cpp converts + quantizes. ~3 min on CPU, no GPU needed.
+python export.py                                         # exports/merged_16bit/ (vLLM) + exports/gguf/<name>.Q8_0.gguf + Modelfile + SERVING.md
+python export.py --gguf q8_0 q6_k                        # other types: evaluate each before shipping (q4_k_m was much worse)
+# then serve it (needs a GPU build of llama.cpp for -ngl) and point the assistant (or the evaluator) at the server:
+llama-server -m exports/gguf/af-finance-qwen3-4b.Q8_0.gguf --jinja -ngl 99 -c 8192 -np 1 -fa on --port 8080 --alias af-finance-qwen3-4b
+python run_assistant.py --backend server --server-url http://localhost:8080/v1 --contract v2
+python eval_model.py --backend server --contract v2 --config configs/eval_v2.yaml --tag gguf   # quantized vs adapter
 ```
 
 Slow tests (Docling PDF ingestion): `pytest -m slow`.

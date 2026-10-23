@@ -6,7 +6,7 @@ load_in_4bit: true
 
 dataset: dataset.jsonl
 output_dir: outputs                 # checkpoints + logs (git-ignored)
-adapter_dir: qwen3_4b_finance_lora  # final LoRA adapters (git-ignored)
+adapter_dir: qwen3_4b_finance_lora_v2  # default adapter for run_assistant / eval / export (v2 won the 2026-10-23 eval); v1: qwen3_4b_finance_lora
 
 lora:
   r: 32

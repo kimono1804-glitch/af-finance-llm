@@ -19,6 +19,7 @@ dependencies = [
 train = ["unsloth", "trl", "peft", "bitsandbytes", "datasets", "transformers", "accelerate"]
 pdf = ["docling"]
 qdrant = ["qdrant-client"]
+compare = ["anthropic>=2.2"]   # eval_model.py --backend claude (comparison baseline)
 dev = ["pytest>=8"]
 
 [tool.pytest.ini_options]

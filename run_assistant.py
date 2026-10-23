@@ -107,8 +107,10 @@ class ServerLLM:
     (<think>...</think> + <tool_call>{...}</tool_call>), so the rest of the pipeline is identical to local mode.
     """
 
-    def __init__(self, url: str, model: str, timeout: float = 600.0, contract: str = CONTRACT):
+    def __init__(self, url: str, model: str, timeout: float = 600.0, contract: str = CONTRACT,
+                 api_key: str | None = None):
         self.url = url.rstrip("/") + "/chat/completions"
+        self.api_key = api_key  # bearer token for hosted OpenAI-compatible APIs; local servers need none
         self.contract = contract
         self.tools = build_tools(contract)
         self.model = model
@@ -149,7 +151,10 @@ class ServerLLM:
 
         body = {"model": self.model, "messages": self.to_openai(messages), "tools": self.tools,
                 "max_tokens": max_new_tokens, "temperature": temperature, "top_p": 0.95}
-        req = urllib.request.Request(self.url, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        req = urllib.request.Request(self.url, data=json.dumps(body).encode(), headers=headers)
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
             msg = json.loads(resp.read())["choices"][0]["message"]
         content = msg.get("content") or ""

@@ -2,13 +2,13 @@
 
 > Single source of truth for Claude Code sessions. Read this file and `documentation/Changelog.md` at the start of every session INSTEAD of analysing the codebase. Open a source file only when a task needs its exact code.
 > Update this file at the end of every prompt that changes or teaches anything (enforced by `.claude/hooks/stop_docs_check.sh`).
-> Last updated: 2026-10-22 21:02 IST
+> Last updated: 2026-10-23 20:31 IST
 
 ---
 
 ## 1. Build progress toward a releasable v1
 
-**Overall: 85%** (weighted milestones; update after every build session and show it to the user)
+**Overall: 93%** (weighted milestones; update after every build session and show it to the user)
 
 | # | Milestone | Weight | Done | Status |
 |---|---|---|---|---|
@@ -17,42 +17,37 @@
 | 3 | Training pipeline + first trained adapter | 15 | 15 | v1 adapter (2026-10-21, 6 tasks). v2 adapter `qwen3_4b_finance_lora_v2/` (2026-10-22 17:19; 2,698 examples, 11 tasks, 1 epoch, 338 steps, final loss ~0.010, peak VRAM 6.19 GB; contract.json v2). DONE. |
 | 4 | Table-aware ingestion + hybrid retrieval | 10 | 10 | Excel and PDF (Docling) verified; PDF chunks identical to Excel. Retrieval recall 100% on 21 real-world questions (rechecked 10:40 after the units change). Units detection for lakh/crore/'000/mn in Excel and PDF. |
 | 5 | End-to-end assistant CLI | 10 | 9 | 4/4 demo answers correct with the v1 adapter. Open: 64-92 s per question with local HF generation (GGUF + llama-server should be faster); server backend only tested against a fake server. |
-| 6 | Evaluation (`eval_model.py`, report in `reports/`) | 15 | 11 | v1 report `reports/eval_2026-10-22_v1.md`: synthetic 90.0% (base 15.0%), real-world 76.2% raw / 20 of 21 with the period guard (base 9.5%). v2 eval: fine-tuned 137/141 cached (4 to redo), base 5/141 - paused, see Next steps. Scorer fixes (optional intermediates, month counts) + `--rescore`. Open: finish v2 eval, GGUF vs adapter.
-| 7 | Export: merged 16-bit + GGUF + Modelfile + serve commands | 10 | 4 | `export.py` + SERVING.md template + `--backend server` done; not run yet. |
-| 8 | Hardening: real/messy files, PDFs, more tasks, relative periods, units | 10 | 10 | PDF verified; 4 new task families (not trained yet); "last month"; period guard; row decimals; period-gap examples; founder phrasing variety; lakh/crore/thousands units end to end (calculator, generator, ingestion; not trained yet); multi-period family (MoM growth, n-month totals/averages, YTD; not trained yet) + 5 real-world cases. Lakh-format sample workbook + 5 real-world lakh cases (rl-01..05). Messy Excel layouts (stacked tables, numbers as text incl. Indian grouping / (negatives), months down the rows, currency in titles). QoQ growth from quarterly tables. Open: an actual founder MIS file, messy PDFs. |
+| 6 | Evaluation (`eval_model.py`, report in `reports/`) | 15 | 15 | v1 report `reports/eval_2026-10-22_v1.md`: synthetic 90.0% (base 15.0%), real-world 76.2% raw / 20 of 21 with the period guard (base 9.5%). **v2 report `reports/eval_2026-10-23_v2.md`: synthetic 95.5% (base 9.1%), real-world 96.8% = 30/31 (base 12.9%).** Scorer fixes (optional intermediates, month counts) + `--rescore`. GGUF vs adapter: q8_0 (dequantized merge) = adapter (`eval_2026-10-23_gguf_dq8.md`). DONE. |
+| 7 | Export: merged 16-bit + GGUF + Modelfile + serve commands | 10 | 10 | `export.py` (dequantized-nf4 merge) -> `exports/merged_16bit/` + `exports/gguf/af-finance-qwen3-4b.Q8_0.gguf` (4.3 GB) + Ollama Modelfile (tool template) + SERVING.md; served by GPU llama-server and evaluated (= adapter, 4x faster). DONE. No verified 4-bit GGUF yet (optional). |
+| 8 | Hardening: real/messy files, PDFs, more tasks, relative periods, units | 10 | 10 | PDF verified; 4 new task families (trained in v2); "last month"; period guard; row decimals; period-gap examples; founder phrasing variety; lakh/crore/thousands units end to end (calculator, generator, ingestion; trained in v2, rl-01..05 all pass); multi-period family (MoM growth, n-month totals/averages, YTD; trained in v2) + 5 real-world cases. Lakh-format sample workbook + 5 real-world lakh cases (rl-01..05). Messy Excel layouts (stacked tables, numbers as text incl. Indian grouping / (negatives), months down the rows, currency in titles). QoQ growth from quarterly tables. Open: an actual founder MIS file, messy PDFs. |
 | 9 | Packaging & release | 10 | 4 | README, `MODEL_CARD.md` draft, CI verified. Open: project license (owner), install simplification, versioning, HF upload, optional UI/API. |
 
 How to recompute: sum the "Done" column (out of 100). Move points only when the work is verified by tests or run output.
 
 ### Next steps (in order)
-**Session paused 2026-10-22 21:02 IST by the user; continue tomorrow.** Nothing is running (eval, chain scripts, keep-awake
-helpers all stopped). Nothing committed by Claude today.
+**State 2026-10-23 18:46 IST:** v2 is the default adapter and is evaluated (`reports/eval_2026-10-23_v2.md`: synthetic 95.5% vs
+base 9.1%, real-world 30/31 = 96.8%). The shippable GGUF is `exports/gguf/af-finance-qwen3-4b.Q8_0.gguf` from the new
+`export.py` (LoRA merged into the dequantized nf4 base); its eval (`reports/eval_2026-10-23_gguf_dq8.md`) equals the adapter
+(95.5% / 96.8%, faithfulness 100%) at ~16 s per question vs 60 s. Unsloth's merge (bf16 base) lost 14 points
+(`reports/eval_2026-10-23_gguf.md`). Nothing running; GPU free. User commits since the 2026-10-22 pause: `3d1b196`,
+`7feb25e`; all of today's code / docs / reports are uncommitted.
 
-State on disk:
-- v2 adapter `qwen3_4b_finance_lora_v2/` trained and saved (contract v2). v1 adapter `qwen3_4b_finance_lora/` untouched.
-- v2 eval cache (`outputs/eval_runs/`): `fine_tuned_v2.jsonl` = 137 rows (all 141 cases except rw-20, rw-21, rw-25, rw-26,
-  removed on purpose because they ran with the old period preprocessing; backup with all 141 rows:
-  `fine_tuned_v2.before_period_fix.jsonl`). `base_v2.jsonl` = 5 rows (raft-1000000..04). No time-limit hits so far.
-- Old-scorer fine-tuned result on all 141 (before the scorer and period fixes): 128/141; most misses were scorer false
-  negatives (burn multiple closing-opening route, "9 months" in a YTD report) that the current scorer accepts.
+0. Comparison with other models (2026-10-23 20:31): `reports/model_comparison_2026-10-23.md` (our harness vs published benchmarks, kept separate). **User rule: do not download models onto the laptop; compare via online sources.** A same-test frontier comparison needs an API key: `eval_model.py --backend claude --claude-model claude-opus-5-5 --contract v2 --config configs/eval_v2.yaml --tag cmp` (ANTHROPIC_API_KEY; ~$5-15 per model) - only if the user provides a key and agrees to the cost.
+1. Run the assistant demo with v2 through the GGUF server (milestone 5: v1-only demo so far; server backend only tested
+   against a fake server). Serve: GPU llama.cpp (section 3) with
+   `-m exports/gguf/af-finance-qwen3-4b.Q8_0.gguf --jinja -ngl 99 -c 8192 -np 1 -fa on --port 8080 --alias af-finance-qwen3-4b`,
+   then `run_assistant.py --backend server --contract v2`.
+2. Optional: a smaller GGUF for < 8 GB GPUs. Try `export.py --gguf q6_k q5_k_m` and evaluate each (`--tag gguf_q6` ...);
+   q4_k_m of this merge double-rounds and failed. Alternative: quantization-aware export later.
+3. v3 data candidates (from the v2 failures): quarter questions answered from monthly rows ("in Q3 FY26 (Oct-25, Nov-25,
+   Dec-25)" -> range_total), missing-data cases where v2 still called the calculator (adjusted EBITDA, gross margin), adjusted
+   EBITDA margin revenue line. Not urgent: v2 already meets the bar.
+4. Milestone 9 (packaging): license choice (owner), install simplification, version tag, optional HF upload (adapter + q8_0
+   GGUF + Modelfile).
+5. Disk cleanup when the user agrees: `exports/old_unsloth_merge/` (degraded, ~15 GB) and `exports/merged_dequant/`
+   (diagnosis copies, ~22 GB) can be deleted; the good export is `exports/merged_16bit/` + `exports/gguf/`.
 
-**Resume checklist (tomorrow):**
-1. Start the remaining v2 eval (4 fine-tuned real-world cases ~5 min, then 136 base cases ~4.5 h). GPU must be free; keep the
-   laptop lid open (the script blocks idle sleep itself):
-   `cd "/c/Users/nevin/Desktop/aeryal flow/finance llm/af-finance-llm"`
-   `/c/Users/nevin/miniconda3/envs/unsloth_env/python.exe -u eval_model.py --config configs/eval_v2.yaml --adapter qwen3_4b_finance_lora_v2 --tag v2 --models both >> outputs/eval_v2_log.txt 2>&1`
-   (run in the background; cached cases are skipped; progress lines `[fine-tuned] k/141` / `[base] k/141` in the log;
-   watchdog `bash outputs/watch_eval_v2.sh` reports every 10 cases). If short on time: `--models ft` first, base later.
-2. When it finishes: delete any row whose turn shows `(TIME LIMIT)` in the log and rerun step 1's command; then write the final
-   report with the current scorer: same command plus `--rescore` (no GPU) -> `reports/eval_<date>_v2.md`.
-3. Compare v2 with v1 (`reports/eval_2026-10-22_v1.md`; note v2 has 11 task families and 31 real-world cases), add the v2
-   numbers to MODEL_CARD.md, update milestone 6.
-4. If v2 wins: set `adapter_dir: qwen3_4b_finance_lora_v2` in `configs/train.yaml` (default for run_assistant / export / eval).
-5. Export + quantization check: `python export.py --adapter qwen3_4b_finance_lora_v2 --gguf q4_k_m` -> serve with llama-server
-   (command in section 10 / `exports/SERVING.md`) -> `eval_model.py --backend server --contract v2 --config configs/eval_v2.yaml --tag gguf`.
-6. Then milestone 9 (packaging): license choice (owner), install simplification, version tag, optional HF upload.
-
-Gotchas for tomorrow: start GPU jobs fresh (boost_process: P-cores, no throttling, no sleep); never put backslashes in a
+Gotchas: start GPU jobs fresh (boost_process: P-cores, no throttling, no sleep); never put backslashes in a
 Bash heredoc (write scripts with the Write tool); a chain script must hold its own keep-awake (use `/proc/$$/winpid` for the
 Windows pid in Git Bash).
 
@@ -88,7 +83,8 @@ Inference flow: question -> relative-period resolution ("last month" -> latest m
 - xformers was UNINSTALLED (wheel built for torch 2.10+cu128). Unsloth uses PyTorch attention. Optional: `unsloth install-kernels xformers`.
 - Harmless noise: `multiprocess resource_tracker ... '_thread.RLock' object has no attribute '_recursion_count'` at exit; HF "symlinks on Windows" warning; "unauthenticated requests to the HF Hub".
 - HF cache `C:\Users\nevin\.cache\huggingface\hub\`: `unsloth/Qwen3-4B-unsloth-bnb-4bit` (3.4 GB), `BAAI/bge-large-en-v1.5` (1.3 GB), `BAAI/bge-reranker-large` (~2.2 GB), `docling-project/docling-models` + `docling-layout-heron` (Docling PDF models).
-- llama.cpp: Unsloth prebuilt CUDA13 build at `C:\Users\nevin\.unsloth\llama.cpp` (tag b11734); binaries in `build\bin\Release\` (`llama-server.exe`, `llama-quantize.exe`); `convert_hf_to_gguf.py` present. Used by `save_pretrained_gguf` and for serving.
+- **GPU llama.cpp (use this for serving):** official release b11734 Windows CUDA 13.4 + cudart at `C:\Users\nevin\.local\llama.cpp\b11734-cuda13\bin\` (`llama-server.exe` sees CUDA0 RTX 5050). Serve: `llama-server.exe -m exports/gguf/Qwen3-4B.Q4_K_M.gguf --jinja -ngl 99 -c 8192 -np 1 --port 8080 --alias af-finance-qwen3-4b` (~3.7 GB VRAM).
+- llama.cpp: Unsloth prebuilt build (**CPU-only**, checked 2026-10-23: `llama-server --list-devices` = none, only `ggml-cpu-*.dll`, no `ggml-cuda.dll`; `-ngl 99` has no effect; GPU serving needs a CUDA build of llama.cpp) at `C:\Users\nevin\.unsloth\llama.cpp` (tag b11734); binaries in `build\bin\Release\` (`llama-server.exe`, `llama-quantize.exe`); `convert_hf_to_gguf.py` present. Used by `save_pretrained_gguf` and for serving.
 - **Patch-script gotcha (hit again twice on 2026-10-22):** even a quoted heredoc (`<<'EOF'`) through the Bash tool turns `\\b` / `\b` into a backspace byte. Never put backslashes in a heredoc: write scripts and doc entries with the Write tool, run them by path, then scan for control bytes. Fixer: replace byte 0x08 with `\b`. Python patch scripts passed through a Bash heredoc mangle backslash escapes (`\b` became a literal backspace byte 0x08 in rag_pipeline.py). Edit regex/backslash code with the Edit tool, never via heredoc string replacement. Check with `grep -rlP "[\x00-\x08]" --include=*.py .`.
 - **Generation slowdown - ROOT CAUSE FOUND (22:56 IST):** Windows runs the eval's single GPU-feeding Python thread on an E-core (i7-14650HX: logical CPUs 0-15 = P-cores, 16-23 = E-cores), probably because the process is background work started from VS Code. Symptoms: 2.5-4.5 tok/s, GPU 5-10% busy, one core 100% (an E-core), py-spy in Unsloth's Triton nf4 GEMV launch. Pinning the running eval to P-cores (affinity 0xFFFF) restored 14.7 tok/s on the next turn. Fix: `common/winperf.py` `boost_process()` (power throttling off via SetProcessInformation + pin to the fastest core class via GetLogicalProcessorInformationEx; no admin; `AF_NO_CPU_BOOST=1` disables) is called at the start of `main()` in run_assistant / eval_model / train_qwen3 / export. Manual fix for an already-running process (PowerShell): `(Get-Process -Id <pid>).ProcessorAffinity = [IntPtr]0xFFFF`. Earlier history: 4,877 s case at 18:25-19:48; slow episode 21:37-22:02; 22:48-22:55. `max_time_per_turn` guard + per-turn speed logging stay.
 - Slowdown episode 21:37-22:02 IST: same E-core cause (see above); priority High did not help, affinity did.
@@ -97,6 +93,7 @@ Inference flow: question -> relative-period resolution ("last month" -> latest m
 - Bash tool gotcha: a stray `cat > file` with no heredoc waits on stdin forever. Pass `< /dev/null` to long python commands; write multi-line patch scripts with the Write tool (heredoc quoting broke one patch on 2026-10-22).
 - Background noise (not the slowdown cause): VS Code's Copilot agent host (`agentHostMain.js`, `computeSessionFileDiffs`) runs `git status --porcelain=v1 -z --untracked-files=all` back-to-back on the home-dir repo `C:\Users\nevin` (535k untracked files, ~5-10 s warm, one core). Workspace `.vscode/settings.json` got `git.ignoredRepositories: ["C:\\Users\\nevin"]` + `git.openRepositoryInParentFolders: never` (hides it from Source Control; does not stop the agent host).
 - Local HF generation speed with the v1 adapter: ~11 tok/s (greedy or sampled), prompt ~2.4k tokens; a typical case = 2 turns, ~640 new tokens, ~55 s.
+- Time: `TZ=Asia/Kolkata date` in Git Bash prints UTC silently; get IST with PowerShell `Get-Date`.
 - Internet ~2 MB/s: big downloads take tens of minutes; run them in the background.
 - While training runs, run other Python with `CUDA_VISIBLE_DEVICES=""` so it stays off the GPU. CPU-heavy work slows training a little (49 -> 58 s/step).
 - **VRAM spill gotcha (Windows WDDM):** when a process needs more than the 8 GB card, the NVIDIA driver silently spills into system RAM ("shared GPU memory") instead of raising OOM, and training slows ~30x. Seen after the mid-training eval (training pid showed 1.78 GB shared). Check with PowerShell `Get-Counter '\GPU Process Memory(*)\Shared Usage'` or Task Manager. Mitigations: `--no-eval`, smaller max_seq_length, or set NVIDIA Control Panel > Manage 3D settings > "CUDA - Sysmem Fallback Policy" = "Prefer No Sysmem Fallback" (fails fast with OOM instead).
@@ -116,14 +113,15 @@ Inference flow: question -> relative-period resolution ("last month" -> latest m
 | File | Purpose |
 |---|---|
 | `generate_raft_data.py` | (2026-10-22 additions: `vary_question`/`EXTRA_QUESTIONS`/`Q_PREFIXES`/`Q_SUFFIXES`; `scale_company`/`pick_money_unit`/`money`/`NON_MONEY_KEYS`/`UNIT_LABELS`/`FROM_UNIT`/`STATEMENT_TASKS`; `Table.cell` (exact rendered cell); cfg `compat_v1` (legacy v1 cases) and `scaled_units`; `_QUOTED_INPUT_RE` check in `validate_example`; v2 features use separate rng streams `question|seed|idx` and `units|seed|idx` so the main rng sequence is unchanged.) Synthetic RAFT dataset -> `dataset.jsonl` + validation. Simulates 12-36 months of a fake startup: P&L, unit economics, pricing plan, cash flow (opening/in/out/closing; an equity raise lands when cash runs low), ARR bridge (open/new/expansion/churned/close), net_revenue series, `ym` (year, month) list. 10 task plans (section 5). Relevant tables + 3-6 distractors (other P&L sections, unit economics, pricing, ARR bridge, quarterly summary, prior-year revenue, headcount, funnel, cash flow, cohorts, inventory, working capital, benchmarks); drops distractors over `max_context_chars`. Ground truth via `common.tools.execute`, checked against independent `common.formulas` truth. Flags `--validate-only --n --output --config`. Missing-data examples are `missing_kind` "cell" (input cell/row removed) or "period" (`period_gap_example`: question asks for a month outside every table, chosen by `absent_months`; share `missing_period_share`). Exports `PROMPT_VERSION`, `TASKS`, `build_example`, `generate`, `validate_example`, `validate_file`, `fy_quarters`, `quarter_values`. |
-| `train_qwen3.py` | Unsloth QLoRA SFT; writes `<adapter>/contract.json` ({contract, prompt_version}) after training; renders with Qwen3 template + `TOOLS`; drops > max_seq_length; `train_on_responses_only` (`num_proc=1`); prints masking check; saves adapter + tokenizer + `loss_history.json` + `loss_curve.png`. Refuses stale datasets. `--max-steps --epochs --config --resume` (latest checkpoint in outputs/) `--no-eval` (skip mid-run eval; recommended on 8 GB). |
+| `train_qwen3.py` | Unsloth QLoRA SFT; writes `<adapter>/contract.json` ({contract, prompt_version}) after training; renders with Qwen3 template + `TOOLS`; drops > max_seq_length; `train_on_responses_only` (`num_proc=1`); prints masking check; saves adapter + tokenizer + `loss_history.json` + `loss_curve.png`. Refuses stale datasets. Refuses to start when `adapter_dir` already holds an adapter unless `--overwrite` (2026-10-23). `--max-steps --epochs --config --resume` (latest checkpoint in outputs/) `--no-eval` (skip mid-run eval; recommended on 8 GB). |
 | `ingest_financials.py` | Excel (2026-10-22 rewrite): `_excel_blocks` (several tables per sheet: any row with >= 2 period cells is a header), `parse_number_text` (Indian/western grouping, (negatives), currency prefixes), `_cell_text`, months-down-rows tables transposed, headerless empty columns dropped, KPI tables don't inherit sheet-wide units (`NON_MONEY_TITLE_RE`), currency fallback, duplicate chunk ids suffixed. Units: Excel normalises `Units:` rows, else title rows / header cells / sheet name; PDF: caption/headers/section, else the section's last 3 text items, else a document-wide units statement (`UNITS_CUE_RE`). Excel (openpyxl values + number formats, pandas structure) and PDF (Docling tables via `export_to_dataframe(doc=doc)`, section headers, text paragraphs ~1,200 chars) -> `TableChunk`s. Detects title rows, `Units:` row, header row, section rows, percent cells, Excel dates -> `Mon-YY`. Long sections split every 12 rows with the header repeated. `PERIOD_RE` matches `Mon-YY`, `Q3 FY26`, `FY27 Plan`, Base/Bull/Bear. |
 | `rag_pipeline.py` | `HybridRetriever`: BM25 over full text (finance tokenizer, `normalize_periods`, `QUERY_EXPANSION` incl. "ebitda margin") + dense bge-large over `chunk_summary()` in Chroma (default) or Qdrant + RRF (k=60) + bge-reranker over summaries -> top_k. `load_models=False` = BM25 only. |
 | `make_sample_mis.py` | `build_data_lakh()` / `build_workbook(out, lakh=True)` / `--lakh`: P&L + cash in INR lakh (units row "INR (₹ in lakhs)", cash units only in the title), no S&M total row. `sample_startup_mis.xlsx` (Nimbus Botanics, FY26 Apr-25..Mar-26, seed 7; sheets P&L / Unit Economics / Pricing / Cash / Headcount). Module constants `PRICING` (price 649, variable_cost 386.5, fixed_costs 9,850,000, planned_hires 1,420,000) and `PL_SECTIONS`. `build_board_pack_pdf()` / `--pdf PATH` writes the same data as a 3-page board-pack PDF (commentary, 12-month P&L, unit economics) with fpdf2. |
 | `run_assistant.py` | End-to-end CLI. Tools shown to the model follow the prompt contract: `FinanceLLM(..., contract=None)` = adapter's contract (`adapter_contract`), `ServerLLM(..., contract=)`, `--contract v1|v2`. `FinanceLLM(adapter_dir or None, base_model)` (None = base model on purpose; `.label`; `.max_time` per-call limit; `.log_rounds` prints tokens/s; `.last_stats`). `ServerLLM(url, model)` for OpenAI-compatible servers (llama-server / Ollama / vLLM / LM Studio): converts messages to OpenAI format with tool_call ids and string arguments, and converts replies back to Qwen3 `<think>` / `<tool_call>` text. `period_guard(question, known_periods, sources)` answers absent-period questions without the model (called in `main()` after relative-period resolution). `run_conversation(llm, user, ...)` = generate -> tool -> generate loop (max 3 rounds) returning `{"thinks","calls","report"}`; `answer()` wraps it. Resolves relative periods before retrieval and prints a NOTE. Flags `--files --question --adapter --top-k --max-new-tokens 2048 --temperature 0.6 --backend local|server --server-url --server-model --retrieval-only --show-context`. |
 | `eval_model.py` | Evaluation. `--rescore` re-scores cached run files with the current scorer (no LLM). Real-world = groups per workbook (main + `outputs/sample_startup_mis_lakh.xlsx` built each run; `_realworld_group`). `--v1-compat` rebuilds the cases exactly as the v1 run started them (no row-decimal alignment, data cfg `compat_v1`, no period guard, contract v1); verified to reproduce every stored v1 result. `--contract v1|v2` (default = configured adapter's; base gets the same). `--adapter DIR` evaluates another adapter (e.g. v2). Suites: `synthetic` (fresh examples, seed 9001, `n_per_task` for each task in `configs/eval.yaml` `tasks`, every 7th missing; oracle context) and `realworld` (21 questions from `eval_cases.py`, context from the retriever after period resolution; records retrieval recall). Models: ft / base / both, or `--backend server`. Resumable raw results in `outputs/eval_runs/<run>.jsonl`; report `reports/eval_<date>[_tag].md` (metrics per suite, per-task tables, failure list, retrieval recall). `--gold` = scorer self-test; `--retrieval-only`; `--no-period-guard` (real-world: raw model on absent-period questions; default uses the guard trace). |
 | `eval_cases.py` | rw-22..rw-26 multi-period (added 2026-10-22); `build_lakh_cases()` rl-01..rl-05 on the lakh workbook (rl-03/04 require from_lakh); `V1_CASE_IDS` = rw-01..rw-21. `RealCase` list rw-01..rw-21: founder-phrased questions on the sample MIS with Python ground truth from `make_sample_mis.build_data()`. LTV/payback accept GM% from the sheet OR derived from the P&L. 4 missing-period cases (Mar-25, Apr-26, Dec-24, Jun-24); 2 relative-period cases ("last month", "previous month"); `needed_sections` for retrieval recall. |
-| `export.py` | Writes `exports/contract.json` + `--contract` hint in SERVING.md. Loads the adapter; `save_pretrained_merged` (`--merged` -> exports/merged_16bit) and `save_pretrained_gguf` (`--gguf q4_k_m ...` -> exports/gguf); writes `exports/gguf/Modelfile` (Ollama) and `exports/SERVING.md` (llama-server / Ollama / vLLM commands). `--name af-finance-qwen3-4b`. |
+| `common/claude_llm.py` | (2026-10-23) `ClaudeLLM`: Claude models as an eval backend via the Anthropic SDK (same prompt + calculator tool; adaptive thinking, effort, raw blocks replayed, fallbacks default for Opus/Sonnet). `eval_model.py --backend claude`. Needs ANTHROPIC_API_KEY. |
+| `export.py` | (rewritten 2026-10-23; no Unsloth export path.) `merge_dequant(adapter, base_model, out)`: LoRA merged into the DEQUANTIZED nf4 base (`bitsandbytes` `dequantize_4bit`; `merge_tensor` = W + (alpha/r) B@A in fp32 -> bf16) -> `exports/merged_16bit/` (HF shards, config without quantization_config, tokenizer/chat template from the adapter dir; also the vLLM source). `to_gguf`: llama.cpp `convert_hf_to_gguf.py` bf16 -> `llama-quantize` per type -> `exports/gguf/<name>.<TYPE>.gguf` (default `--gguf q8_0`, the only verified type; bf16 deleted unless `--keep-bf16`). `write_modelfile` (Qwen3 Ollama tool template `OLLAMA_TEMPLATE`, num_ctx 8192), `write_serving` (SERVING.md + contract.json). Flags `--adapter --out --name af-finance-qwen3-4b --llama-cpp (~/.unsloth/llama.cpp) --device cpu --keep-bf16 --finalize-only`. ~3 min on CPU. |
 
 ### `common/` (shared package; prompts/tools/tables changes alter the training contract)
 | File | Purpose |
@@ -143,7 +141,7 @@ Inference flow: question -> relative-period resolution ("last month" -> latest m
 | File | Purpose |
 |---|---|
 | `configs/data.yaml` | seed 3407, n_examples 1000, test 0.10, missing 0.10 (missing_period_share 0.4), scaled_units 0.2, multi_period weight 1.25, output dataset.jsonl, task_weights (net_revenue 1.0, contribution_margin 1.5, ebitda 1.5, break_even 1.5, ltv_cac 1.5, payback 1.0, runway 1.0, burn_multiple 1.0, magic_number 1.0, gross_margin 0.75), distractors 3-6, max_context_chars 5500, edges (negative_gross_margin .08, seasonal_churn_spike .10, zero_churn .03, capitalized_rnd .25, deferred_revenue .25, step_fixed_costs .25, price_below_variable_cost .06, cash_positive .08, arr_decline .08). Running the generator now produces a v2 (10-task) dataset; the v1 adapter was trained on 6 tasks. |
-| `configs/train.yaml` | Qwen3-4B bnb-4bit, max_seq_length 6144, LoRA r32/a32/d0 all linear, 2 epochs, bs 1 x ga 8, lr 2e-4, warmup 10, linear, wd 0.01, adamw_8bit, log 5, eval each epoch, save 50, outputs/, qwen3_4b_finance_lora/. |
+| `configs/train.yaml` | Qwen3-4B bnb-4bit, max_seq_length 6144, LoRA r32/a32/d0 all linear, 2 epochs, bs 1 x ga 8, lr 2e-4, warmup 10, linear, wd 0.01, adamw_8bit, log 5, eval each epoch, save 50, outputs/, `adapter_dir: qwen3_4b_finance_lora_v2` (since 2026-10-23 the default adapter for run_assistant / eval_model / export; v1 = `qwen3_4b_finance_lora`). Its `dataset: dataset.jsonl` is the stale v1 file, so a plain `train_qwen3.py` refuses on two counts. |
 | `configs/rag.yaml` | bge-large / bge-reranker-large on CPU, Chroma in-memory, candidates 20, rerank 20, top_k 5, rrf_k 60, 12 rows/chunk, query_expansion true. |
 | `configs/train_v2.yaml` | v2 run: dataset_v2.jsonl, outputs/v2, qwen3_4b_finance_lora_v2, 1 epoch, eval off. |
 | `configs/eval_v2.yaml` | tasks null (all 11), n_per_task 10. |
@@ -157,6 +155,8 @@ Inference flow: question -> relative-period resolution ("last month" -> latest m
 | `tests/test_server_backend.py` | ServerLLM round trip against a fake OpenAI server (tool_call ids, string arguments, reasoning_content); `period_guard`. |
 | `tests/test_messy_excel.py` | Number text parsing, currency detection, messy workbook (stacked tables, text numbers, transposed cash, KPI units). |
 | `tests/test_units_contract.py` | Unit formulas; calculator conversion before CAC; v1 contract frozen at 2013a079fb; `adapter_contract`; scaled-unit examples validate for all 10 tasks; misquoted input caught; 16 unit phrasings; Excel title units. |
+| `tests/test_claude_backend.py` | (skips without anthropic) ClaudeLLM tool conversion + fake-client round trip. |
+| `tests/test_export.py` | (needs torch + bitsandbytes; CI skips it) tiny fake nf4 checkpoint + adapter: merged weight == deq(nf4) + scale B@A exactly, != original-weight merge; config cleaned; Modelfile has the tool template. |
 | `tests/test_pdf_ingest.py` | `@slow`: board-pack PDF via Docling equals Excel chunks (Revenue, Variable Costs, Profit Summary incl. negatives), commentary text chunk, churn % row. ~2.5 min. `pytest -m slow`. |
 | `pyproject.toml` | Deps + extras; pytest `-m 'not slow'` by default. |
 | `README.md` | Overview, setup, commands for every step (data, train, ingest, assistant, eval, export, server mode), dataset design, evaluation, layout. |
@@ -167,8 +167,8 @@ Inference flow: question -> relative-period resolution ("last month" -> latest m
 | `.github/workflows/tests.yml` | CI on push/PR: ubuntu, Python 3.12, `pip install pydantic pyyaml pandas openpyxl rank-bm25 pytest`, `pytest -q`, then generate + validate 300 examples. Verified locally in a clean Python 3.14 venv (50 passed). |
 | `.claude/settings.json` + `.claude/hooks/` | SessionStart (inject memory + changelog) and Stop (block if files newer than docs) hooks. The parent workspace has its own `.claude/settings.json` calling the same scripts. Hooks may need `/hooks` or a restart to activate in the session that created them. |
 | `documentation/memory.md`, `Changelog.md` | This file; change log (newest first). |
-| `reports/` | Evaluation reports (committed). Not created yet. |
-| Ignored artifacts | `dataset_v2.jsonl` (v2, 3,000 ex, 11 tasks), `dataset.jsonl` (v1, 1,000 ex), `outputs/` (checkpoints, `train_log.txt`, `eval_runs/`), `qwen3_4b_finance_lora/`, `exports/`, `unsloth_compiled_cache/`. |
+| `reports/` | Evaluation reports (committed): `eval_2026-10-22_v1.md`, `eval_2026-10-23_v2.md` (current), `eval_2026-10-21_gold-selftest.md` (scorer self-test). |
+| Ignored artifacts | `dataset_v2.jsonl` (v2, 3,000 ex, 11 tasks), `dataset.jsonl` (v1, 1,000 ex), `outputs/` (checkpoints, `train_log.txt`, `eval_runs/`), `qwen3_4b_finance_lora/`, `exports/`, `unsloth_compiled_cache/`. `exports/` now (2026-10-23): `merged_16bit/` + `gguf/af-finance-qwen3-4b.Q8_0.gguf` + Modelfile + SERVING.md + contract.json (the good export); `merged_dequant/` (scratch copy of the same merge + `qwen3-4b-dq.{BF16,Q4_K_M,Q8_0}.gguf`, the files used in the diagnosis); `old_unsloth_merge/` (Unsloth's bf16-merge, Q4_K_M + Q8_0 GGUFs: DEGRADED, kept only for reference; safe to delete, ~15 GB). |
 
 ---
 
@@ -204,6 +204,7 @@ Inference flow: question -> relative-period resolution ("last month" -> latest m
 - Earlier interim note (65/81): synthetic 54/60; real-world 5/5 so far (rw-01..rw-05). Failures: (a) false "missing data" refusals with the data present: raft-1020001 (adjusted EBITDA + margin; revenue table was in context), raft-1050007 (payback); (b) raft-1020006 ebitda missing-data case where the refusal did not clearly name the missing input; (c) LTV:CAC when S&M must be summed from marketing rows: raft-1040001/04/07 took "S&M Spend" from the QUARTERLY summary distractor (a v2 table v1 never saw) and cited a non-existent monthly column. Eval contexts come from the current (v2) generator: new distractors (ARR, quarterly, cash flow) and varied period phrasing, so these scores measure generalisation.
 - 2026-10-22: `--v1-compat` re-score check: 81/81 fine-tuned + every cached base row reproduce exactly. Base reruns of time-limited cases: raft-1020005 and raft-1030003 OK (raft-1030003 was OK before too), others still FAIL (no tool call / wrong values).
 - **v1 eval FINAL (2026-10-22 11:51, `reports/eval_2026-10-22_v1.md`)**: synthetic end-to-end 90.0% ft vs 15.0% base (numeric 90.7/9.3, formula 96.3/9.3, faithful 100/40.7, missing 83.3/66.7, false refusals 3.7/59.3); real-world 76.2% vs 9.5% (raw, no guard; ft fails rw-12 + rw-16..19). Per task (ft): break_even/CM/net_revenue 100%, payback 90%, ebitda 80%, ltv_cac 70%.
+- **v2 eval FINAL (2026-10-23 14:12, `reports/eval_2026-10-23_v2.md`, contract v2, period guard on)**: synthetic (110 cases, 11 tasks) end-to-end 95.5% ft vs 9.1% base (numeric 97.0/7.1, formula 98.0/10.1, faithful 100/43.4, missing 81.8/63.6, edge 100/80, false refusals 1.0/63.6; latency 60 s vs 112 s). Real-world (31) 96.8% vs 12.9% (base passes = the 4 guard cases only). ft per task: ebitda 80%, gross_margin / multi_period / payback 90%, rest 100%. ft failures: raft-1020001 (adjusted EBITDA margin values), raft-1020006 + raft-1090006 (tool call on a missing-data case), raft-1050007 (payback false refusal), raft-1100008 (4-month range total), rw-25 (quarter as 3 months read as YTD, refused). vs v1: 57/60 on v1's 6 tasks (v1 54/60), rw-01..21 21/21, rl-01..05 5/5.
 - PDF: board-pack PDF via Docling -> 9 chunks; P&L sections identical to Excel incl. negative EBIT; percent rows intact; commentary as a text chunk. First run downloads Docling models; ~2.5 min on CPU.
 
 ---
@@ -217,7 +218,9 @@ Inference flow: question -> relative-period resolution ("last month" -> latest m
 - Retrieval models on CPU at inference.
 - Relative periods resolved by deterministic preprocessing, not training: "last month" = latest month in the MIS.
 - Evaluation: synthetic with oracle context (model skill) + real-world through RAG (system skill); fresh seed 9001; greedy decoding; ground truth always from Python.
-- `configs/eval.yaml` `tasks` must match what the evaluated adapter was trained on.
+- `configs/eval.yaml` `tasks` must match what the evaluated adapter was trained on. For the v2 adapter use `configs/eval_v2.yaml` (all 11 tasks).
+- 2026-10-23: v2 adapter is the default (won the eval on every comparable slice). Training never silently replaces an existing adapter (`--overwrite` needed).
+- 2026-10-23: never use Unsloth's `save_pretrained_merged` / `save_pretrained_gguf` for this QLoRA adapter: they merge into the original bf16 weights, not the nf4-dequantized base the adapter was trained on (cost 14 points end-to-end). `export.py` merges into deq(nf4(W)). Default GGUF type q8_0 (q4_k_m of that merge double-rounds).
 - Server backend (OpenAI-compatible) so users can run the GGUF with llama-server / Ollama without the training stack; the same pipeline and the same evaluator work through it.
 - No missing-data examples where the value is derivable (would teach wrong refusals).
 - The fake "Cash Position" distractor was replaced by a consistent cash-flow table from the simulated data.
@@ -231,14 +234,14 @@ Inference flow: question -> relative-period resolution ("last month" -> latest m
 
 ## 8. Known gaps / risks
 
-- Model quality not measured yet (eval pending). Training loss ~0.01 means the templates are learned; real-world generalisation is the open question.
-- The v1 adapter does not know runway / burn multiple / magic number / standalone gross margin (v2 data ready, needs retraining).
+- Model quality measured on synthetic data and one synthetic sample MIS (v2: 95.5% / 96.8%); a real founder MIS file is still untested.
+- The v1 adapter does not know runway / burn multiple / magic number / standalone gross margin (v2 does).
 - Phrasing variety in training questions is limited (3-4 templates per task); the real-world eval uses different phrasing on purpose.
 - Multi-period added to data (not trained); no QoQ from quarterly tables, no multi-metric (e.g. average burn = average of out - in). Lakh/crore handled in data + ingestion but not trained yet and untested on a real lakh-format file; break-even with fixed costs in lakh (pricing sheet) is not generated.
 - Messy real MIS layouts (merged cells, transposed tables, several tables per sheet) untested; only synthetic files tested.
-- Export/GGUF and the llama-server path not run yet; quantization loss unknown.
+- GGUF: q8_0 of the dequantized merge is the shippable file (eval in progress 2026-10-23). No good 4-bit GGUF yet: re-quantizing the nf4-derived weights to q4_k_m double-rounds (much worse); q5_k_m / q6_k untested. 8 GB GPUs fit q8_0 (~5.4 GB with `-fa on`); smaller GPUs need a lower type or a retrain/quantization-aware path.
 - No UI/API; models load per run.
-- Release still needs: project license choice (owner), eval numbers in MODEL_CARD.md, versioning/tags, packaged install, HF upload.
+- Release still needs: project license choice (owner), GGUF eval numbers in MODEL_CARD.md, versioning/tags, packaged install, HF upload.
 
 ---
 
@@ -248,6 +251,7 @@ Inference flow: question -> relative-period resolution ("last month" -> latest m
 - Keep `documentation/memory.md` and `documentation/Changelog.md` updated after every prompt, automatically. Log every change with date and time (IST).
 - New sessions: read these two files instead of analysing the codebase.
 - Git: no "Co-Authored-By: Claude" trailer. The user commits on their own. Do not push unless asked.
+- Do NOT download models onto the laptop for comparisons; use online sources (said 2026-10-23). Ask before any large download.
 - Wants clarifying questions when needed; recommendations over option lists; "continue building" = keep working through the milestones in order.
 - Other project: AFSI Suite (drone swarm OS) in `Desktop/aeryal flow/afsi suite/` (unrelated).
 
